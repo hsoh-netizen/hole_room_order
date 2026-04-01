@@ -91,7 +91,24 @@ export default function App() {
     return () => { unsubStores(); unsubSessions(); };
   }, []);
 
-  // --- [신규 기능] 하트비트(Ping) 및 강제 로그아웃 감지 시스템 ---
+  // --- [버그 수정됨] 하트비트(Ping) 및 강제 로그아웃 감지 시스템 ---
+  
+  // 1. 강제 로그아웃(Kick) 당했는지 확인하는 옵저버
+  useEffect(() => {
+    if (!session || !activeSessionsLocal) return;
+
+    let key;
+    if (session.role === 'admin') key = `admin_${session.adminId}`;
+    if (session.role === 'tablet') key = `tablet_${session.adminId}_${session.roomId}`;
+    if (session.role === 'supervisor') key = 'supervisor';
+
+    if (activeSessionsLocal[key] && activeSessionsLocal[key].kicked) {
+      alert("슈퍼바이저 시스템에 의해 원격으로 로그아웃 되었습니다.");
+      handleLogout();
+    }
+  }, [session, activeSessionsLocal]);
+
+  // 2. 하트비트 핑 발송 (의존성 배열 최적화로 무한루프 방지)
   useEffect(() => {
     if (!session) return;
 
@@ -100,17 +117,12 @@ export default function App() {
     if (session.role === 'tablet') key = `tablet_${session.adminId}_${session.roomId}`;
     if (session.role === 'supervisor') key = 'supervisor';
 
-    // 1. 강제 로그아웃(Kick) 당했는지 확인
-    if (activeSessionsLocal && activeSessionsLocal[key] && activeSessionsLocal[key].kicked) {
-      alert("슈퍼바이저 시스템에 의해 원격으로 로그아웃 되었습니다.");
-      handleLogout();
-      return;
-    }
-
-    // 2. 하트비트: 10초마다 현재 시간을 DB에 기록하여 생존(온라인) 신고
     const ping = () => {
       setActiveSessionsLocal(prev => {
         const safePrev = prev || {};
+        // 킥 당한 상태라면 핑을 보내어 상태를 덮어쓰지 않음
+        if (safePrev[key] && safePrev[key].kicked) return safePrev;
+
         const next = { ...safePrev, [key]: { lastSeen: Date.now(), kicked: false } };
         setTimeout(() => {
           setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions'), { data: next }).catch(console.error);
@@ -123,8 +135,7 @@ export default function App() {
     const intervalId = setInterval(ping, 10000); 
     
     return () => clearInterval(intervalId);
-  }, [session, activeSessionsLocal]); // session이 유지되는 동안만 작동
-
+  }, [session]); 
 
   // 우아한 탭 닫기 시 세션 즉시 정리
   useEffect(() => {
@@ -937,7 +948,7 @@ function AdminMenu({ menuItems, adminId, updateStore, showConfirm }) {
                 <div className="font-black text-lg text-gray-900">{item.price.toLocaleString()}원</div>
                 <div className="flex gap-2 mt-4 pt-4 border-t border-gray-50">
                   <button onClick={() => setEditingItem(item)} className="flex-1 bg-gray-50 text-gray-600 py-2 rounded-lg hover:bg-gray-100 flex justify-center items-center gap-1 text-sm font-medium"><Edit className="w-4 h-4" /> 수정</button>
-                  <button onClick={() => deleteItem(item.id)} className="flex-1 bg-red-50 text-red-600 py-2 rounded-lg hover:bg-red-100 flex justify-center items-center gap-1 text-sm font-medium"><Trash2 className="w-4 h-4" /> 삭제</button>
+                  <button onClick={() => deleteItem(item.id)} className="flex-1 bg-red-50 text-red-600 py-2 rounded-lg hover:bg-red-100 flex justify-center items-center gap-1 text-sm font-medium"><Trash className="w-4 h-4" /> 삭제</button>
                 </div>
               </div>
             </div>
