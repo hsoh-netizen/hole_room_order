@@ -51,19 +51,27 @@ export default function App() {
   const [storesLocal, setStoresLocal] = useState(null);
   const [activeSessionsLocal, setActiveSessionsLocal] = useState(null);
   
-  // session: { role: 'supervisor' | 'admin' | 'tablet', adminId?: string, roomId?: string } | null
-  const [session, setSession] = useState(null);
+  // 세션 유지(새로고침 방어)를 위해 로컬 스토리지 연동
+  const [session, setSession] = useState(() => {
+    const saved = localStorage.getItem('room_order_session_v4');
+    return saved ? JSON.parse(saved) : null;
+  });
+  
   const [modalConfig, setModalConfig] = useState(null);
 
-  // Unload 관리를 위한 Ref
   const sessionRef = useRef(session);
   const activeSessionsRef = useRef(activeSessionsLocal);
   useEffect(() => { sessionRef.current = session; }, [session]);
   useEffect(() => { activeSessionsRef.current = activeSessionsLocal; }, [activeSessionsLocal]);
 
+  // 세션이 변경될 때 로컬 스토리지에 저장
+  useEffect(() => {
+    if (session) localStorage.setItem('room_order_session_v4', JSON.stringify(session));
+    else localStorage.removeItem('room_order_session_v4');
+  }, [session]);
+
   // 1. 파이어베이스 실시간 동기화 (onSnapshot)
   useEffect(() => {
-    // 클라우드 저장소 경로 지정
     const storesRef = doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'stores');
     const sessionsRef = doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions');
 
@@ -72,7 +80,7 @@ export default function App() {
       if (docSnap.exists()) {
         setStoresLocal(docSnap.data().data);
       } else if (isInitialStores) {
-        setDoc(storesRef, { data: INITIAL_STORES }).catch(console.error); // 최초 접속 시 초기 데이터 생성
+        setDoc(storesRef, { data: INITIAL_STORES }).catch(console.error); 
       }
       isInitialStores = false;
     }, (error) => console.error(error));
@@ -90,7 +98,21 @@ export default function App() {
     return () => { unsubStores(); unsubSessions(); };
   }, []);
 
-  // 접속 종료(브라우저 닫기) 시 세션 정리 (클라우드 반영)
+  // 2. 새로고침으로 인해 온라인 상태가 끊긴 경우 자동 복구
+  useEffect(() => {
+    if (!session || !activeSessionsLocal) return;
+    let key;
+    if (session.role === 'admin') key = `admin_${session.adminId}`;
+    if (session.role === 'tablet') key = `tablet_${session.adminId}_${session.roomId}`;
+    if (session.role === 'supervisor') key = 'supervisor';
+
+    if (key && !activeSessionsLocal[key]) {
+      const newSessions = { ...activeSessionsLocal, [key]: true };
+      setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions'), { data: newSessions }).catch(console.error);
+    }
+  }, [session, activeSessionsLocal]);
+
+  // 접속 종료(브라우저 닫기) 시 온라인 관제 세션 정리 (클라우드 반영)
   useEffect(() => {
     const handleUnload = () => {
       const currentSession = sessionRef.current;
@@ -106,7 +128,7 @@ export default function App() {
     return () => window.removeEventListener('beforeunload', handleUnload);
   }, []);
 
-  // 클라우드로 데이터 전송을 감싼 헬퍼 함수들
+  // 클라우드로 데이터 전송 헬퍼 함수 (에러 방지 || [] 처리를 강하게 추가)
   const setStores = (updateFn) => {
     setStoresLocal(prev => {
       const newVal = typeof updateFn === 'function' ? updateFn(prev) : updateFn;
@@ -118,7 +140,11 @@ export default function App() {
   const updateStore = (adminId, key, updateFn) => {
     setStoresLocal(prev => {
       if (!prev || !prev[adminId]) return prev;
-      const currentVal = prev[adminId][key];
+      
+      // undefined 오류 방지: 배열 형태여야 하는 키들은 무조건 빈 배열로 기본값 설정
+      const isArrayKey = ['orders', 'calls', 'menuItems', 'rooms'].includes(key);
+      const currentVal = prev[adminId][key] || (isArrayKey ? [] : null);
+      
       const updatedVal = typeof updateFn === 'function' ? updateFn(currentVal) : updateFn;
       const newStores = {
         ...prev,
@@ -140,7 +166,7 @@ export default function App() {
     });
   };
 
-  const getRoomName = (adminId, roomId) => storesLocal?.[adminId]?.rooms.find(r => r.id === roomId)?.name || '알 수 없는 룸';
+  const getRoomName = (adminId, roomId) => (storesLocal?.[adminId]?.rooms || []).find(r => r.id === roomId)?.name || '알 수 없는 룸';
 
   // 로딩 화면 (파이어베이스 연결 대기)
   if (!storesLocal || !activeSessionsLocal) {
@@ -246,7 +272,7 @@ function AuthView({ stores, handleLogin, showAlert }) {
     } else {
       let found = false;
       for (const [adminId, store] of Object.entries(stores)) {
-        const room = store.rooms.find(r => r.loginId === id && r.password === pw);
+        const room = (store.rooms || []).find(r => r.loginId === id && r.password === pw);
         if (room) {
           handleLogin({ role: 'tablet', adminId, roomId: room.id });
           found = true;
@@ -305,13 +331,6 @@ function AuthView({ stores, handleLogin, showAlert }) {
               <LogIn className="w-5 h-5" /> 접속하기
             </button>
           </form>
-
-          <div className="mt-8 bg-gray-50 p-4 rounded-xl text-xs text-gray-600 border border-gray-200">
-            <p className="font-bold mb-2 text-gray-800">💡 데모용 테스트 계정 안내</p>
-            <p className="flex justify-between mb-1"><span>슈퍼바이저:</span> <b className="text-indigo-600">ratel / 1q2w3e4r!</b></p>
-            <p className="flex justify-between mb-1"><span>매장 관리자:</span> <b>admin / admin</b></p>
-            <p className="flex justify-between"><span>태블릿(1번방):</span> <b>room1 / 1</b></p>
-          </div>
         </div>
       </div>
     </div>
@@ -368,14 +387,14 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
     const loginId = fd.get('loginId');
     const adminId = roomForm.adminId;
 
-    const isDuplicate = stores[adminId].rooms.some(r => r.loginId === loginId && r.id !== roomForm.roomId);
+    const isDuplicate = (stores[adminId].rooms || []).some(r => r.loginId === loginId && r.id !== roomForm.roomId);
     if (isDuplicate) {
       await showAlert('오류', '이 매장 내에 이미 존재하는 룸 ID입니다.');
       return;
     }
 
     setStores(prev => {
-      const storeRooms = prev[adminId].rooms;
+      const storeRooms = prev[adminId].rooms || [];
       let newRooms;
       if (roomForm.mode === 'add') {
         newRooms = [...storeRooms, { id: 'room_' + Date.now(), name: fd.get('name'), loginId, password: fd.get('password') }];
@@ -391,7 +410,7 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
     if(await showConfirm('룸 삭제', '이 룸의 접속 계정을 영구히 삭제하시겠습니까?')) {
       setStores(prev => ({
         ...prev,
-        [adminId]: { ...prev[adminId], rooms: prev[adminId].rooms.filter(r => r.id !== roomId) }
+        [adminId]: { ...prev[adminId], rooms: (prev[adminId].rooms || []).filter(r => r.id !== roomId) }
       }));
     }
   };
@@ -455,7 +474,7 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
 
                   <div className="p-5 bg-white">
                     <h4 className="text-sm font-bold text-gray-400 mb-3 flex items-center gap-2"><Smartphone className="w-4 h-4"/> 할당된 룸(태블릿) 목록</h4>
-                    {store.rooms.length === 0 ? (
+                    {!(store.rooms) || store.rooms.length === 0 ? (
                       <div className="text-sm text-gray-400 py-2">등록된 룸이 없습니다.</div>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -505,7 +524,7 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
                       </div>
                       
                       <div className="p-4 grid grid-cols-2 gap-3">
-                        {store.rooms.map(room => {
+                        {(store.rooms || []).map(room => {
                           const isTabletOnline = activeSessions[`tablet_${adminId}_${room.id}`];
                           return (
                             <div key={room.id} className={`flex items-center gap-2 p-3 rounded-xl border ${isTabletOnline ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-100'}`}>
@@ -514,7 +533,7 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
                             </div>
                           );
                         })}
-                        {store.rooms.length === 0 && <div className="col-span-2 text-xs text-gray-400 py-2">룸이 없습니다.</div>}
+                        {(!store.rooms || store.rooms.length === 0) && <div className="col-span-2 text-xs text-gray-400 py-2">룸이 없습니다.</div>}
                       </div>
                     </div>
                   );
@@ -587,8 +606,15 @@ function AdminView({ adminId, storeData, updateStore, getRoomName, logout, showA
   const [activeTab, setActiveTab] = useState('orders'); 
   
   const [popups, setPopups] = useState([]);
-  const knownOrderIds = useRef(new Set(storeData.orders.map(o => o.id)));
-  const knownCallIds = useRef(new Set(storeData.calls.map(c => c.id)));
+  
+  // 파이어베이스에서 불러오는 안전한 배열들
+  const orders = storeData.orders || [];
+  const calls = storeData.calls || [];
+  const menuItems = storeData.menuItems || [];
+  const rooms = storeData.rooms || [];
+
+  const knownOrderIds = useRef(new Set(orders.map(o => o.id)));
+  const knownCallIds = useRef(new Set(calls.map(c => c.id)));
 
   const playSound = () => {
     try {
@@ -604,8 +630,8 @@ function AdminView({ adminId, storeData, updateStore, getRoomName, logout, showA
   };
 
   useEffect(() => {
-    const newOrders = storeData.orders.filter(o => o.status === 'pending' && !knownOrderIds.current.has(o.id));
-    const newCalls = storeData.calls.filter(c => c.status === 'pending' && !knownCallIds.current.has(c.id));
+    const newOrders = orders.filter(o => o.status === 'pending' && !knownOrderIds.current.has(o.id));
+    const newCalls = calls.filter(c => c.status === 'pending' && !knownCallIds.current.has(c.id));
     
     let shouldAlert = false;
     newOrders.forEach(o => {
@@ -620,7 +646,7 @@ function AdminView({ adminId, storeData, updateStore, getRoomName, logout, showA
     });
 
     if (shouldAlert) playSound();
-  }, [storeData.orders, storeData.calls]);
+  }, [orders, calls]);
 
   const completeOrder = (id) => {
     updateStore(adminId, 'orders', prev => prev.map(o => o.id === id ? { ...o, status: 'completed' } : o));
@@ -643,7 +669,7 @@ function AdminView({ adminId, storeData, updateStore, getRoomName, logout, showA
           <span className="font-bold text-blue-300">{storeData.storeName}</span>
         </div>
         <nav className="flex-1 p-4 space-y-2">
-          <SidebarBtn icon={<ShoppingCart />} label="주문/호출 현황" active={activeTab === 'orders'} onClick={() => setActiveTab('orders')} badge={storeData.orders.filter(o=>o.status==='pending').length + storeData.calls.filter(c=>c.status==='pending').length} />
+          <SidebarBtn icon={<ShoppingCart />} label="주문/호출 현황" active={activeTab === 'orders'} onClick={() => setActiveTab('orders')} badge={orders.filter(o=>o.status==='pending').length + calls.filter(c=>c.status==='pending').length} />
           <SidebarBtn icon={<UtensilsCrossed />} label="메뉴 관리" active={activeTab === 'menu'} onClick={() => setActiveTab('menu')} />
           <SidebarBtn icon={<Home />} label="룸 현황 및 퇴실관리" active={activeTab === 'rooms'} onClick={() => setActiveTab('rooms')} />
         </nav>
@@ -664,9 +690,9 @@ function AdminView({ adminId, storeData, updateStore, getRoomName, logout, showA
         </header>
 
         <main className="flex-1 overflow-y-auto p-6">
-          {activeTab === 'orders' && <AdminOrders orders={storeData.orders} calls={storeData.calls} completeOrder={completeOrder} resolveCall={resolveCall} getRoomName={getRoomName} adminId={adminId} updateStore={updateStore} showConfirm={showConfirm} />}
-          {activeTab === 'menu' && <AdminMenu menuItems={storeData.menuItems} adminId={adminId} updateStore={updateStore} showConfirm={showConfirm} />}
-          {activeTab === 'rooms' && <AdminRoomsReadOnly rooms={storeData.rooms} adminId={adminId} updateStore={updateStore} showAlert={showAlert} showConfirm={showConfirm} />}
+          {activeTab === 'orders' && <AdminOrders orders={orders} calls={calls} rooms={rooms} completeOrder={completeOrder} resolveCall={resolveCall} getRoomName={getRoomName} adminId={adminId} updateStore={updateStore} showConfirm={showConfirm} />}
+          {activeTab === 'menu' && <AdminMenu menuItems={menuItems} adminId={adminId} updateStore={updateStore} showConfirm={showConfirm} />}
+          {activeTab === 'rooms' && <AdminRoomsReadOnly rooms={rooms} adminId={adminId} updateStore={updateStore} showAlert={showAlert} showConfirm={showConfirm} />}
         </main>
 
         <div className="absolute top-6 right-6 flex flex-col gap-3 z-50">
@@ -725,11 +751,27 @@ function SidebarBtn({ icon, label, active, onClick, badge }) {
   );
 }
 
-function AdminOrders({ orders, calls, completeOrder, resolveCall, getRoomName, adminId, updateStore, showConfirm }) {
+function AdminOrders({ orders, calls, rooms, completeOrder, resolveCall, getRoomName, adminId, updateStore, showConfirm }) {
+  const [selectedRoomFilter, setSelectedRoomFilter] = useState('all');
+  const pendingCalls = calls.filter(c => c.status === 'pending');
+  const filteredOrders = orders.filter(o => selectedRoomFilter === 'all' || o.roomId === selectedRoomFilter);
+
   const deleteOrder = async (id) => {
     if(await showConfirm('주문 삭제', '주문 내역을 영구 삭제하시겠습니까?')) updateStore(adminId, 'orders', prev => prev.filter(o => o.id !== id));
   };
-  const pendingCalls = calls.filter(c => c.status === 'pending');
+
+  const deleteAllOrders = async () => {
+    const msg = selectedRoomFilter === 'all' 
+      ? '전체 주문 내역을 일괄 영구 삭제하시겠습니까?' 
+      : `[${getRoomName(selectedRoomFilter)}]의 모든 주문 내역을 삭제하시겠습니까?`;
+      
+    if (await showConfirm('주문 일괄 삭제', msg)) {
+      updateStore(adminId, 'orders', prev => {
+        if (selectedRoomFilter === 'all') return [];
+        return prev.filter(o => o.roomId !== selectedRoomFilter);
+      });
+    }
+  };
 
   return (
     <div className="flex flex-col gap-8">
@@ -748,10 +790,36 @@ function AdminOrders({ orders, calls, completeOrder, resolveCall, getRoomName, a
       )}
 
       <div>
-        <h2 className="text-gray-700 font-bold text-lg mb-4 flex items-center gap-2"><ShoppingCart className="w-5 h-5" /> 주문 내역</h2>
-        {orders.length === 0 ? <div className="text-gray-500 py-10 text-center bg-white rounded-xl border border-dashed border-gray-300">아직 접수된 주문이 없습니다.</div> : (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+          <h2 className="text-gray-700 font-bold text-lg flex items-center gap-2">
+            <ShoppingCart className="w-5 h-5" /> 주문 내역
+          </h2>
+          
+          {/* 룸별 필터링 및 일괄삭제 컨트롤 */}
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedRoomFilter}
+              onChange={(e) => setSelectedRoomFilter(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm font-bold text-gray-700 bg-white"
+            >
+              <option value="all">전체 룸 보기</option>
+              {rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+            
+            {filteredOrders.length > 0 && (
+              <button
+                onClick={deleteAllOrders}
+                className="bg-red-50 text-red-600 border border-red-200 px-3 py-2 rounded-lg font-bold text-sm hover:bg-red-100 flex items-center gap-1 shadow-sm transition-colors"
+              >
+                <Trash2 className="w-4 h-4" /> 일괄 삭제
+              </button>
+            )}
+          </div>
+        </div>
+
+        {filteredOrders.length === 0 ? <div className="text-gray-500 py-10 text-center bg-white rounded-xl border border-dashed border-gray-300">표시할 주문이 없습니다.</div> : (
           <div className="grid gap-4">
-            {[...orders].reverse().map(order => (
+            {[...filteredOrders].reverse().map(order => (
               <div key={order.id} className={`bg-white p-5 rounded-xl border-l-4 shadow-sm flex flex-col md:flex-row justify-between gap-4 transition-all ${order.status === 'pending' ? 'border-blue-500 ring-1 ring-blue-100' : 'border-green-500 opacity-70'}`}>
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-2">
@@ -832,7 +900,6 @@ function AdminMenu({ menuItems, adminId, updateStore, showConfirm }) {
   );
 }
 
-
 // ==========================================
 // 사용자 뷰 (태블릿)
 // ==========================================
@@ -841,12 +908,17 @@ function TabletView({ adminId, storeData, roomId, updateStore, logout, showAlert
   const [activeCategory, setActiveCategory] = useState('전체');
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   
-  const currentRoom = storeData.rooms.find(r => r.id === roomId);
-  const categories = ['전체', ...new Set(storeData.menuItems.map(m => m.category))];
-  const filteredMenu = activeCategory === '전체' ? storeData.menuItems : storeData.menuItems.filter(m => m.category === activeCategory);
+  // 파이어베이스에서 불러오는 안전한 배열
+  const menuItems = storeData.menuItems || [];
+  const orders = storeData.orders || [];
+  const rooms = storeData.rooms || [];
+
+  const currentRoom = rooms.find(r => r.id === roomId);
+  const categories = ['전체', ...new Set(menuItems.map(m => m.category))];
+  const filteredMenu = activeCategory === '전체' ? menuItems : menuItems.filter(m => m.category === activeCategory);
 
   const cartTotal = cart.reduce((sum, cartItem) => sum + (cartItem.item.price * cartItem.quantity), 0);
-  const myOrders = storeData.orders.filter(o => o.roomId === roomId);
+  const myOrders = orders.filter(o => o.roomId === roomId);
   const totalOrderedAmount = myOrders.reduce((sum, order) => sum + order.total, 0);
 
   const addToCart = (item) => {
