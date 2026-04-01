@@ -8,7 +8,6 @@ import {
 
 // --- 파이어베이스 연동을 위한 모듈 로드 ---
 import { initializeApp } from "firebase/app";
-import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 import { getFirestore, doc, onSnapshot, setDoc } from "firebase/firestore";
 
 // --- 고객님의 파이어베이스 설정값 적용 ---
@@ -21,9 +20,8 @@ const firebaseConfig = {
   appId: "1:167618977732:web:3a49ea5945ea2bdc470e91"
 };
 
-// 파이어베이스 초기화
+// 파이어베이스 초기화 (Auth 제거)
 const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
 const db = getFirestore(app);
 
 // --- 초기 더미 데이터 ---
@@ -49,8 +47,7 @@ const INITIAL_STORES = {
 };
 
 export default function App() {
-  // 파이어베이스 인증 및 클라우드 데이터 상태 관리
-  const [user, setUser] = useState(null);
+  // 클라우드 데이터 상태 관리
   const [storesLocal, setStoresLocal] = useState(null);
   const [activeSessionsLocal, setActiveSessionsLocal] = useState(null);
   
@@ -64,17 +61,8 @@ export default function App() {
   useEffect(() => { sessionRef.current = session; }, [session]);
   useEffect(() => { activeSessionsRef.current = activeSessionsLocal; }, [activeSessionsLocal]);
 
-  // 1. 파이어베이스 익명 로그인 (데이터베이스 접근 권한 획득)
+  // 1. 파이어베이스 실시간 동기화 (onSnapshot)
   useEffect(() => {
-    signInAnonymously(auth).catch(console.error);
-    const unsubscribe = onAuthStateChanged(auth, setUser);
-    return () => unsubscribe();
-  }, []);
-
-  // 2. 파이어베이스 실시간 동기화 (onSnapshot)
-  useEffect(() => {
-    if (!user) return;
-
     // 클라우드 저장소 경로 지정
     const storesRef = doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'stores');
     const sessionsRef = doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions');
@@ -84,7 +72,7 @@ export default function App() {
       if (docSnap.exists()) {
         setStoresLocal(docSnap.data().data);
       } else if (isInitialStores) {
-        setDoc(storesRef, { data: INITIAL_STORES }); // 최초 접속 시 초기 데이터 생성
+        setDoc(storesRef, { data: INITIAL_STORES }).catch(console.error); // 최초 접속 시 초기 데이터 생성
       }
       isInitialStores = false;
     }, (error) => console.error(error));
@@ -94,13 +82,13 @@ export default function App() {
       if (docSnap.exists()) {
         setActiveSessionsLocal(docSnap.data().data);
       } else if (isInitialSessions) {
-        setDoc(sessionsRef, { data: {} });
+        setDoc(sessionsRef, { data: {} }).catch(console.error);
       }
       isInitialSessions = false;
     }, (error) => console.error(error));
 
     return () => { unsubStores(); unsubSessions(); };
-  }, [user]);
+  }, []);
 
   // 접속 종료(브라우저 닫기) 시 세션 정리 (클라우드 반영)
   useEffect(() => {
@@ -155,7 +143,7 @@ export default function App() {
   const getRoomName = (adminId, roomId) => storesLocal?.[adminId]?.rooms.find(r => r.id === roomId)?.name || '알 수 없는 룸';
 
   // 로딩 화면 (파이어베이스 연결 대기)
-  if (!user || !storesLocal || !activeSessionsLocal) {
+  if (!storesLocal || !activeSessionsLocal) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white font-sans">
         <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
