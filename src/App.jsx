@@ -1,13 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-// Lucide-react 라이브러리에서 사용할 아이콘들을 불러옵니다.
 import { 
   Home, Settings, Bell, ShoppingCart, Check, X, 
   Plus, Edit, Trash2, List, UtensilsCrossed, MonitorPlay, 
   AlertCircle, Coffee, FileText, RotateCcw, 
-  LogOut, User, Lock, Store, Key, LogIn, ShieldCheck, Activity, Users, Smartphone, Server
+  LogOut, User, Lock, Store, Key, LogIn, ShieldCheck, Activity, Users, Smartphone, Server, PowerOff
 } from 'lucide-react';
 
-// --- 파이어베이스(Firebase) 연동을 위한 모듈 로드 ---
+// --- 파이어베이스 연동을 위한 모듈 로드 ---
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, onSnapshot, setDoc } from "firebase/firestore";
 
@@ -21,11 +20,10 @@ const firebaseConfig = {
   appId: "1:167618977732:web:3a49ea5945ea2bdc470e91"
 };
 
-// --- 파이어베이스 초기화 (Auth 제거)
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-// --- 초기 더미 데이터 세팅 ---
+// --- 초기 더미 데이터 ---
 const INITIAL_MENU = [
   { id: 'm1', name: '아메리카노', price: 4500, description: '최고급 원두로 내린 아메리카노', category: '음료' },
   { id: 'm2', name: '카페라떼', price: 5000, description: '부드러운 우유가 들어간 라떼', category: '음료' },
@@ -47,7 +45,6 @@ const INITIAL_STORES = {
   }
 };
 
-
 // ==========================================
 // 최상위 메인 컴포넌트 (App)
 // ==========================================
@@ -55,7 +52,6 @@ export default function App() {
   const [storesLocal, setStoresLocal] = useState(null);
   const [activeSessionsLocal, setActiveSessionsLocal] = useState(null);
   
-  // 세션 유지
   const [session, setSession] = useState(() => {
     const saved = localStorage.getItem('room_order_session_v4');
     return saved ? JSON.parse(saved) : null;
@@ -73,57 +69,75 @@ export default function App() {
     else localStorage.removeItem('room_order_session_v4');
   }, [session]);
 
-  // 파이어베이스 실시간 동기화
+  // 파이어베이스 실시간 데이터 동기화
   useEffect(() => {
     const storesRef = doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'stores');
     const sessionsRef = doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions');
 
     let isInitialStores = true;
     const unsubStores = onSnapshot(storesRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setStoresLocal(docSnap.data().data);
-      } else if (isInitialStores) {
-        setDoc(storesRef, { data: INITIAL_STORES }).catch(console.error); 
-      }
+      if (docSnap.exists()) setStoresLocal(docSnap.data().data);
+      else if (isInitialStores) setDoc(storesRef, { data: INITIAL_STORES }).catch(console.error); 
       isInitialStores = false;
-    }, (error) => console.error(error));
+    });
 
     let isInitialSessions = true;
     const unsubSessions = onSnapshot(sessionsRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setActiveSessionsLocal(docSnap.data().data);
-      } else if (isInitialSessions) {
-        setDoc(sessionsRef, { data: {} }).catch(console.error);
-      }
+      if (docSnap.exists()) setActiveSessionsLocal(docSnap.data().data);
+      else if (isInitialSessions) setDoc(sessionsRef, { data: {} }).catch(console.error);
       isInitialSessions = false;
-    }, (error) => console.error(error));
+    });
 
     return () => { unsubStores(); unsubSessions(); };
   }, []);
 
-  // 온라인 상태 자동 복구 로직
+  // --- [신규 기능] 하트비트(Ping) 및 강제 로그아웃 감지 시스템 ---
   useEffect(() => {
-    if (!session || !activeSessionsLocal) return;
+    if (!session) return;
+
     let key;
     if (session.role === 'admin') key = `admin_${session.adminId}`;
     if (session.role === 'tablet') key = `tablet_${session.adminId}_${session.roomId}`;
     if (session.role === 'supervisor') key = 'supervisor';
 
-    if (key && !activeSessionsLocal[key]) {
-      const newSessions = { ...activeSessionsLocal, [key]: true };
-      setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions'), { data: newSessions }).catch(console.error);
+    // 1. 강제 로그아웃(Kick) 당했는지 확인
+    if (activeSessionsLocal && activeSessionsLocal[key] && activeSessionsLocal[key].kicked) {
+      alert("슈퍼바이저 시스템에 의해 원격으로 로그아웃 되었습니다.");
+      handleLogout();
+      return;
     }
-  }, [session, activeSessionsLocal]);
 
-  // 접속 종료(브라우저 닫기) 시 세션 정리
+    // 2. 하트비트: 10초마다 현재 시간을 DB에 기록하여 생존(온라인) 신고
+    const ping = () => {
+      setActiveSessionsLocal(prev => {
+        const safePrev = prev || {};
+        const next = { ...safePrev, [key]: { lastSeen: Date.now(), kicked: false } };
+        setTimeout(() => {
+          setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions'), { data: next }).catch(console.error);
+        }, 0);
+        return next;
+      });
+    };
+
+    ping(); // 최초 로그인 또는 새로고침 직후 즉시 1회 실행
+    const intervalId = setInterval(ping, 10000); 
+    
+    return () => clearInterval(intervalId);
+  }, [session, activeSessionsLocal]); // session이 유지되는 동안만 작동
+
+
+  // 우아한 탭 닫기 시 세션 즉시 정리
   useEffect(() => {
     const handleUnload = () => {
       const currentSession = sessionRef.current;
       if (currentSession && activeSessionsRef.current) {
+        let key;
+        if (currentSession.role === 'admin') key = `admin_${currentSession.adminId}`;
+        if (currentSession.role === 'tablet') key = `tablet_${currentSession.adminId}_${currentSession.roomId}`;
+        if (currentSession.role === 'supervisor') key = 'supervisor';
+
         const parsed = { ...activeSessionsRef.current };
-        if (currentSession.role === 'admin') delete parsed[`admin_${currentSession.adminId}`];
-        if (currentSession.role === 'tablet') delete parsed[`tablet_${currentSession.adminId}_${currentSession.roomId}`];
-        if (currentSession.role === 'supervisor') delete parsed['supervisor'];
+        delete parsed[key];
         setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions'), { data: parsed });
       }
     };
@@ -148,15 +162,9 @@ export default function App() {
       
       const isArrayKey = ['orders', 'calls', 'menuItems', 'rooms'].includes(key);
       const currentVal = prev[adminId][key] || (isArrayKey ? [] : null);
-      
       const updatedVal = typeof updateFn === 'function' ? updateFn(currentVal) : updateFn;
-      const newStores = {
-        ...prev,
-        [adminId]: {
-          ...prev[adminId],
-          [key]: updatedVal
-        }
-      };
+      
+      const newStores = { ...prev, [adminId]: { ...prev[adminId], [key]: updatedVal } };
       
       setTimeout(() => {
         setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'stores'), { data: newStores }).catch(console.error);
@@ -167,12 +175,9 @@ export default function App() {
 
   const getRoomName = (adminId, roomId) => {
     const safeStores = storesLocal || {};
-    const safeStore = safeStores[adminId] || {};
-    const rooms = safeStore.rooms || [];
-    return rooms.find(r => r.id === roomId)?.name || '알 수 없는 룸';
+    return (safeStores[adminId]?.rooms || []).find(r => r.id === roomId)?.name || '알 수 없는 룸';
   };
 
-  // 로딩 화면
   if (!storesLocal || !activeSessionsLocal) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white font-sans">
@@ -184,10 +189,25 @@ export default function App() {
   }
 
   const handleLogin = (newSession) => {
-    setSession(newSession);
+    setSession(newSession); // 세션이 지정되면 하트비트 useEffect가 알아서 DB에 등록함
   };
 
   const handleLogout = () => {
+    if (session) {
+      let key;
+      if (session.role === 'admin') key = `admin_${session.adminId}`;
+      if (session.role === 'tablet') key = `tablet_${session.adminId}_${session.roomId}`;
+      if (session.role === 'supervisor') key = 'supervisor';
+
+      setActiveSessionsLocal(prev => {
+        const next = { ...prev };
+        delete next[key];
+        setTimeout(() => {
+          setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions'), { data: next }).catch(console.error);
+        }, 0);
+        return next;
+      });
+    }
     setSession(null);
   };
 
@@ -204,10 +224,7 @@ export default function App() {
   const showConfirm = (title, message) => showModal('confirm', title, message);
   const showPrompt = (title, message, defaultValue = '') => showModal('prompt', title, message, defaultValue);
 
-  // 뷰 라우팅
-  if (!session) {
-    return <AuthView stores={storesLocal} handleLogin={handleLogin} showAlert={showAlert} />;
-  }
+  if (!session) return <AuthView stores={storesLocal} handleLogin={handleLogin} showAlert={showAlert} />;
 
   return (
     <>
@@ -248,25 +265,17 @@ function AuthView({ stores, handleLogin, showAlert }) {
     const pw = fd.get('password');
 
     if (tab === 'supervisor') {
-      if (id === 'ratel' && pw === '1q2w3e4r!') {
-        handleLogin({ role: 'supervisor' });
-      } else {
-        await showAlert('인증 실패', '슈퍼바이저 계정 정보가 일치하지 않습니다.');
-      }
+      if (id === 'ratel' && pw === '1q2w3e4r!') handleLogin({ role: 'supervisor' });
+      else await showAlert('인증 실패', '슈퍼바이저 계정 정보가 일치하지 않습니다.');
     } else if (tab === 'admin') {
       const safeStores = stores || {};
-      if (safeStores[id] && safeStores[id].password === pw) {
-        handleLogin({ role: 'admin', adminId: id });
-      } else {
-        await showAlert('로그인 실패', '매장 ID 또는 비밀번호가 일치하지 않습니다.');
-      }
+      if (safeStores[id] && safeStores[id].password === pw) handleLogin({ role: 'admin', adminId: id });
+      else await showAlert('로그인 실패', '매장 ID 또는 비밀번호가 일치하지 않습니다.');
     } else {
       let found = false;
       const safeStores = stores || {};
       for (const [adminId, store] of Object.entries(safeStores)) {
-        const safeStore = store || {};
-        const rooms = safeStore.rooms || [];
-        const room = rooms.find(r => r.loginId === id && r.password === pw);
+        const room = (store.rooms || []).find(r => r.loginId === id && r.password === pw);
         if (room) {
           handleLogin({ role: 'tablet', adminId, roomId: room.id });
           found = true;
@@ -312,7 +321,6 @@ function AuthView({ stores, handleLogin, showAlert }) {
                 <input required name="loginId" className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-10 pr-4 focus:ring-2 focus:ring-blue-500 outline-none transition-all" placeholder="아이디를 입력하세요" />
               </div>
             </div>
-
             <div>
               <label className="block text-sm font-bold text-gray-700 mb-1">비밀번호</label>
               <div className="relative">
@@ -320,7 +328,6 @@ function AuthView({ stores, handleLogin, showAlert }) {
                 <input required type="password" name="password" className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-10 pr-4 focus:ring-2 focus:ring-blue-500 outline-none transition-all" placeholder="비밀번호를 입력하세요" />
               </div>
             </div>
-
             <button type="submit" className={`w-full text-white font-bold py-3.5 rounded-xl mt-6 shadow-md transition-colors flex justify-center items-center gap-2 ${tab === 'supervisor' ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
               <LogIn className="w-5 h-5" /> 접속하기
             </button>
@@ -339,18 +346,37 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
   const [storeForm, setStoreForm] = useState(null); 
   const [roomForm, setRoomForm] = useState(null); 
 
+  // 하트비트 비교를 위해 현재 시각을 5초마다 갱신
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(timer);
+  }, []);
+
   const safeStores = stores || {};
+
+  const checkIsOnline = (key) => {
+    const sessionData = activeSessions[key];
+    if (!sessionData || sessionData.kicked) return false;
+    // 25초 이상 하트비트가 없으면 비정상 종료(오프라인)로 판단
+    return (now - sessionData.lastSeen) < 25000; 
+  };
+
+  const kickSession = async (key) => {
+    if(await showConfirm('원격 로그아웃', '해당 기기를 강제로 로그아웃 시키겠습니까?\n진행 중인 작업이 즉시 중단됩니다.')) {
+      const nextSessions = { ...activeSessions, [key]: { ...activeSessions[key], kicked: true } };
+      setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions'), { data: nextSessions }).catch(console.error);
+    }
+  };
 
   const handleStoreSubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const adminId = storeForm.mode === 'add' ? fd.get('adminId') : storeForm.adminId;
-    
     if (storeForm.mode === 'add' && safeStores[adminId]) {
       await showAlert('오류', '이미 존재하는 매장 ID입니다.');
       return;
     }
-
     setStores(prev => {
       const safePrev = prev || {};
       const currentStore = safePrev[adminId] || {};
@@ -385,7 +411,6 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
     const fd = new FormData(e.target);
     const loginId = fd.get('loginId');
     const adminId = roomForm.adminId;
-
     const currentStore = safeStores[adminId] || {};
     const storeRooms = currentStore.rooms || [];
 
@@ -400,11 +425,8 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
       const targetStore = safePrev[adminId] || {};
       const rooms = targetStore.rooms || [];
       let newRooms;
-      if (roomForm.mode === 'add') {
-        newRooms = [...rooms, { id: 'room_' + Date.now(), name: fd.get('name'), loginId, password: fd.get('password') }];
-      } else {
-        newRooms = rooms.map(r => r.id === roomForm.roomId ? { ...r, name: fd.get('name'), loginId, password: fd.get('password') } : r);
-      }
+      if (roomForm.mode === 'add') newRooms = [...rooms, { id: 'room_' + Date.now(), name: fd.get('name'), loginId, password: fd.get('password') }];
+      else newRooms = rooms.map(r => r.id === roomForm.roomId ? { ...r, name: fd.get('name'), loginId, password: fd.get('password') } : r);
       return { ...safePrev, [adminId]: { ...targetStore, rooms: newRooms } };
     });
     setRoomForm(null);
@@ -415,11 +437,7 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
       setStores(prev => {
         const safePrev = prev || {};
         const targetStore = safePrev[adminId] || {};
-        const rooms = targetStore.rooms || [];
-        return {
-          ...safePrev,
-          [adminId]: { ...targetStore, rooms: rooms.filter(r => r.id !== roomId) }
-        };
+        return { ...safePrev, [adminId]: { ...targetStore, rooms: (targetStore.rooms || []).filter(r => r.id !== roomId) } };
       });
     }
   };
@@ -428,12 +446,11 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
     <div className="flex h-screen bg-gray-100 font-sans">
       <div className="w-64 bg-indigo-950 text-white flex flex-col">
         <div className="p-6 text-lg font-black border-b border-indigo-900 flex items-center gap-2">
-          <ShieldCheck className="w-7 h-7 text-indigo-400" />
-          슈퍼바이저 시스템
+          <ShieldCheck className="w-7 h-7 text-indigo-400" /> 슈퍼바이저
         </div>
         <nav className="flex-1 p-4 space-y-2">
           <SidebarBtn icon={<Store />} label="매장 및 계정 관리" active={activeTab === 'manage'} onClick={() => setActiveTab('manage')} />
-          <SidebarBtn icon={<Activity />} label="시스템 관제 (모니터링)" active={activeTab === 'monitor'} onClick={() => setActiveTab('monitor')} />
+          <SidebarBtn icon={<Activity />} label="접속 관제 및 제어" active={activeTab === 'monitor'} onClick={() => setActiveTab('monitor')} />
         </nav>
         <div className="p-4 border-t border-indigo-900">
           <button onClick={logout} className="w-full py-3 bg-indigo-900 hover:bg-indigo-800 rounded-lg font-medium transition flex justify-center items-center gap-2">
@@ -445,7 +462,7 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
       <div className="flex-1 flex flex-col overflow-hidden relative">
         <header className="bg-white shadow-sm p-5 flex justify-between items-center z-10">
           <h1 className="text-xl font-bold text-gray-800">
-            {activeTab === 'manage' ? '전체 매장 및 룸(태블릿) 관리' : '실시간 접속 현황 관제'}
+            {activeTab === 'manage' ? '전체 매장 및 룸(태블릿) 관리' : '실시간 접속 관제 및 제어'}
           </h1>
         </header>
 
@@ -469,19 +486,14 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
                   <div key={adminId} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
                     <div className="bg-gray-50 p-5 border-b border-gray-200 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
                       <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <h3 className="text-xl font-black text-gray-900">{storeName}</h3>
-                        </div>
+                        <div className="flex items-center gap-2 mb-1"><h3 className="text-xl font-black text-gray-900">{storeName}</h3></div>
                         <div className="flex gap-4 text-sm text-gray-600 bg-white inline-flex px-3 py-1.5 rounded border border-gray-200">
-                          <span className="flex items-center gap-1"><User className="w-4 h-4"/> <b>ID:</b> {adminId}</span>
-                          <div className="w-px bg-gray-300"></div>
+                          <span className="flex items-center gap-1"><User className="w-4 h-4"/> <b>ID:</b> {adminId}</span><div className="w-px bg-gray-300"></div>
                           <span className="flex items-center gap-1"><Key className="w-4 h-4"/> <b>PW:</b> {password}</span>
                         </div>
                       </div>
                       <div className="flex gap-2">
-                        <button onClick={() => setRoomForm({mode:'add', adminId})} className="bg-white border border-indigo-200 text-indigo-700 px-4 py-2 rounded-lg hover:bg-indigo-50 font-bold text-sm flex items-center gap-1">
-                          <Smartphone className="w-4 h-4"/> 룸 추가발급
-                        </button>
+                        <button onClick={() => setRoomForm({mode:'add', adminId})} className="bg-white border border-indigo-200 text-indigo-700 px-4 py-2 rounded-lg hover:bg-indigo-50 font-bold text-sm flex items-center gap-1"><Smartphone className="w-4 h-4"/> 룸 발급</button>
                         <button onClick={() => setStoreForm({mode:'edit', adminId, ...safeStore})} className="bg-white border border-gray-300 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-50"><Edit className="w-4 h-4"/></button>
                         <button onClick={() => deleteStore(adminId)} className="bg-red-50 text-red-600 px-3 py-2 rounded-lg hover:bg-red-100"><Trash2 className="w-4 h-4"/></button>
                       </div>
@@ -489,17 +501,13 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
 
                     <div className="p-5 bg-white">
                       <h4 className="text-sm font-bold text-gray-400 mb-3 flex items-center gap-2"><Smartphone className="w-4 h-4"/> 할당된 룸(태블릿) 목록</h4>
-                      {storeRooms.length === 0 ? (
-                        <div className="text-sm text-gray-400 py-2">등록된 룸이 없습니다.</div>
-                      ) : (
+                      {storeRooms.length === 0 ? <div className="text-sm text-gray-400 py-2">등록된 룸이 없습니다.</div> : (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                           {storeRooms.map(room => (
                             <div key={room.id} className="border border-gray-200 rounded-xl p-4 flex justify-between items-center hover:border-indigo-300 transition-colors">
                               <div>
                                 <div className="font-bold text-gray-800 mb-1">{room.name}</div>
-                                <div className="text-xs text-gray-500 flex gap-2">
-                                  <span>ID: {room.loginId}</span> / <span>PW: {room.password}</span>
-                                </div>
+                                <div className="text-xs text-gray-500 flex gap-2"><span>ID: {room.loginId}</span> / <span>PW: {room.password}</span></div>
                               </div>
                               <div className="flex gap-1">
                                 <button onClick={() => setRoomForm({mode:'edit', adminId, roomId:room.id, ...room})} className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"><Edit className="w-4 h-4"/></button>
@@ -520,7 +528,7 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
             <div className="max-w-6xl mx-auto">
               <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-xl mb-6 flex items-center gap-3">
                 <Server className="w-6 h-6 text-indigo-600" />
-                <p className="text-indigo-900 font-medium">여러 브라우저 탭에서 각 계정으로 접속하여 <b>🟢 온라인 상태</b>가 실시간으로 변하는 것을 확인해 보세요.</p>
+                <p className="text-indigo-900 font-medium">비정상적인 접속 끊김(네트워크 단절 등)도 25초 이내에 자동 감지되며, <b>[강제 로그아웃]</b> 클릭 시 원격으로 즉시 기기에서 튕겨냅니다.</p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -528,31 +536,42 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
                   const safeStore = store || {};
                   const storeName = safeStore.storeName || '알 수 없는 매장';
                   const storeRooms = safeStore.rooms || [];
-                  const isAdminOnline = activeSessions[`admin_${adminId}`];
+                  const adminKey = `admin_${adminId}`;
+                  const isAdminOnline = checkIsOnline(adminKey);
                   
                   return (
                     <div key={adminId} className={`bg-white rounded-2xl border-2 transition-colors overflow-hidden ${isAdminOnline ? 'border-indigo-400 shadow-md' : 'border-gray-200'}`}>
                       <div className={`p-4 flex items-center justify-between border-b ${isAdminOnline ? 'bg-indigo-50/50 border-indigo-100' : 'bg-gray-50 border-gray-200'}`}>
                         <div className="flex items-center gap-3">
                           <StatusIndicator online={isAdminOnline} />
-                          <div>
-                            <div className="font-black text-gray-900">{storeName}</div>
-                            <div className="text-xs text-gray-500">관리자 PC</div>
-                          </div>
+                          <div><div className="font-black text-gray-900">{storeName}</div><div className="text-xs text-gray-500">관리자 PC</div></div>
                         </div>
+                        {isAdminOnline && (
+                          <button onClick={() => kickSession(adminKey)} className="flex items-center gap-1 text-xs bg-red-100 text-red-700 px-2.5 py-1.5 rounded-lg hover:bg-red-200 font-bold transition-colors">
+                            <PowerOff className="w-3 h-3"/> 강제 로그아웃
+                          </button>
+                        )}
                       </div>
                       
-                      <div className="p-4 grid grid-cols-2 gap-3">
+                      <div className="p-4 grid grid-cols-1 gap-3">
                         {storeRooms.map(room => {
-                          const isTabletOnline = activeSessions[`tablet_${adminId}_${room.id}`];
+                          const tabletKey = `tablet_${adminId}_${room.id}`;
+                          const isTabletOnline = checkIsOnline(tabletKey);
                           return (
-                            <div key={room.id} className={`flex items-center gap-2 p-3 rounded-xl border ${isTabletOnline ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-100'}`}>
-                              <StatusIndicator online={isTabletOnline} small />
-                              <div className="font-bold text-sm text-gray-700">{room.name}</div>
+                            <div key={room.id} className={`flex items-center justify-between p-3 rounded-xl border ${isTabletOnline ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-100'}`}>
+                              <div className="flex items-center gap-2">
+                                <StatusIndicator online={isTabletOnline} small />
+                                <div className="font-bold text-sm text-gray-700">{room.name}</div>
+                              </div>
+                              {isTabletOnline && (
+                                <button onClick={() => kickSession(tabletKey)} className="flex items-center gap-1 text-[10px] bg-red-100 text-red-700 px-2 py-1 rounded hover:bg-red-200 font-bold transition-colors">
+                                  <PowerOff className="w-3 h-3"/> 로그아웃
+                                </button>
+                              )}
                             </div>
                           );
                         })}
-                        {storeRooms.length === 0 && <div className="col-span-2 text-xs text-gray-400 py-2">룸이 없습니다.</div>}
+                        {storeRooms.length === 0 && <div className="text-xs text-gray-400 py-2">할당된 룸이 없습니다.</div>}
                       </div>
                     </div>
                   );
@@ -569,10 +588,7 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
             <div><label className="block text-sm font-bold text-gray-700 mb-1">매장명 (표시용)</label><input required name="storeName" defaultValue={storeForm.storeName} className="w-full border border-gray-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="예: 룸오더 1호점" /></div>
             <div><label className="block text-sm font-bold text-gray-700 mb-1">관리자 접속 ID</label><input required name="adminId" defaultValue={storeForm.adminId} readOnly={storeForm.mode === 'edit'} className={`w-full border border-gray-300 rounded-lg p-2.5 outline-none ${storeForm.mode === 'edit' ? 'bg-gray-100 text-gray-500' : 'focus:ring-2 focus:ring-indigo-500'}`} placeholder="영문/숫자 고유 ID" /></div>
             <div><label className="block text-sm font-bold text-gray-700 mb-1">접속 비밀번호</label><input required name="password" defaultValue={storeForm.password} className="w-full border border-gray-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="비밀번호 설정" /></div>
-            <div className="flex justify-end gap-2 pt-4">
-              <button type="button" onClick={() => setStoreForm(null)} className="px-5 py-2.5 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200">취소</button>
-              <button type="submit" className="px-5 py-2.5 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700">저장</button>
-            </div>
+            <div className="flex justify-end gap-2 pt-4"><button type="button" onClick={() => setStoreForm(null)} className="px-5 py-2.5 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200">취소</button><button type="submit" className="px-5 py-2.5 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700">저장</button></div>
           </form>
         </ModalWrapper>
       )}
@@ -586,10 +602,7 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
               <div><label className="block text-sm font-bold text-gray-700 mb-1">접속 ID</label><input required name="loginId" defaultValue={roomForm.loginId} className="w-full border border-gray-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="해당 매장 내에서 고유한 ID" /></div>
               <div><label className="block text-sm font-bold text-gray-700 mb-1">비밀번호</label><input required name="password" defaultValue={roomForm.password} className="w-full border border-gray-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none" /></div>
             </div>
-            <div className="flex justify-end gap-2 pt-4">
-              <button type="button" onClick={() => setRoomForm(null)} className="px-5 py-2.5 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200">취소</button>
-              <button type="submit" className="px-5 py-2.5 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700">저장</button>
-            </div>
+            <div className="flex justify-end gap-2 pt-4"><button type="button" onClick={() => setRoomForm(null)} className="px-5 py-2.5 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200">취소</button><button type="submit" className="px-5 py-2.5 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700">저장</button></div>
           </form>
         </ModalWrapper>
       )}
@@ -619,7 +632,7 @@ function ModalWrapper({ title, children, onClose }) {
 }
 
 // ==========================================
-// 매장 관리자 뷰 (Admin PC용)
+// 관리자 뷰 (Admin PC)
 // ==========================================
 function AdminView({ adminId, storeData, updateStore, getRoomName, logout, showAlert, showConfirm }) {
   const [activeTab, setActiveTab] = useState('orders'); 
@@ -632,109 +645,54 @@ function AdminView({ adminId, storeData, updateStore, getRoomName, logout, showA
   const rooms = safeStoreData.rooms || [];
   const storeName = safeStoreData.storeName || '알 수 없는 매장';
 
-  // 시각적 팝업을 띄운 ID들을 기억 (알림 팝업 전용)
   const knownOrderIds = useRef(new Set(orders.map(o => o.id)));
   const knownCallIds = useRef(new Set(calls.map(c => c.id)));
 
-  // === 오디오 엔진 통합 및 루프 시스템 ===
   const audioCtxRef = useRef(null);
   const audioIntervalRef = useRef(null);
 
-  // AudioContext 초기화 및 반환 (브라우저 정책 우회 및 재사용)
   const getAudioCtx = () => {
-    if (!audioCtxRef.current) {
-      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    if (audioCtxRef.current.state === 'suspended') {
-      audioCtxRef.current.resume();
-    }
+    if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
     return audioCtxRef.current;
   };
 
-  // 1. 주문 알림 소리 (딩동! 경쾌하고 밝은 소리)
   const playOrderSound = () => {
     try {
-      const ctx = getAudioCtx();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine'; // 부드러운 파형
-      osc.frequency.setValueAtTime(880, ctx.currentTime); // 라(A5)
-      osc.frequency.setValueAtTime(1318.51, ctx.currentTime + 0.15); // 미(E6)
-      
-      gain.gain.setValueAtTime(0.2, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
-      
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.4);
+      const ctx = getAudioCtx(); const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      osc.type = 'sine'; osc.frequency.setValueAtTime(880, ctx.currentTime); osc.frequency.setValueAtTime(1318.51, ctx.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+      osc.connect(gain); gain.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime + 0.4);
     } catch (e) {}
   };
 
-  // 2. 호출 알림 소리 (삐빕! 주의를 끄는 묵직한 소리)
   const playCallSound = () => {
     try {
-      const ctx = getAudioCtx();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'triangle'; // 약간 날카로운 파형
-      osc.frequency.setValueAtTime(523.25, ctx.currentTime); // 도(C5)
-      osc.frequency.setValueAtTime(440, ctx.currentTime + 0.2); // 라(A4)
-      
-      gain.gain.setValueAtTime(0.2, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
-      
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.5);
+      const ctx = getAudioCtx(); const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      osc.type = 'triangle'; osc.frequency.setValueAtTime(523.25, ctx.currentTime); osc.frequency.setValueAtTime(440, ctx.currentTime + 0.2);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+      osc.connect(gain); gain.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime + 0.5);
     } catch (e) {}
   };
 
-  // 현재 대기 중인 항목이 있는지 확인하는 불리언(Boolean) 값
   const hasPendingOrders = orders.some(o => o.status === 'pending');
   const hasPendingCalls = calls.some(c => c.status === 'pending');
 
-  // 오디오 반복(Loop) 컨트롤 이펙트
   useEffect(() => {
-    // 기존에 돌고 있던 반복 타이머가 있다면 초기화
-    if (audioIntervalRef.current) {
-      clearInterval(audioIntervalRef.current);
-      audioIntervalRef.current = null;
-    }
-
-    // 대기 중인 주문이나 호출이 아무것도 없다면 즉시 종료
+    if (audioIntervalRef.current) { clearInterval(audioIntervalRef.current); audioIntervalRef.current = null; }
     if (!hasPendingOrders && !hasPendingCalls) return;
 
-    // 소리를 재생하는 래퍼 함수 (주문과 호출이 겹칠 경우 0.5초 시차를 둠)
     const triggerSound = () => {
-      if (hasPendingOrders && hasPendingCalls) {
-        playOrderSound();
-        setTimeout(playCallSound, 500); // 소리가 겹치지 않도록 0.5초 간격으로 재생
-      } else if (hasPendingOrders) {
-        playOrderSound();
-      } else if (hasPendingCalls) {
-        playCallSound();
-      }
+      if (hasPendingOrders && hasPendingCalls) { playOrderSound(); setTimeout(playCallSound, 500); } 
+      else if (hasPendingOrders) playOrderSound();
+      else if (hasPendingCalls) playCallSound();
     };
 
-    // 대기 건이 생기자마자 즉시 1회 재생
     triggerSound();
-
-    // 이후 2초(2000ms) 간격으로 무한 반복
     audioIntervalRef.current = setInterval(triggerSound, 2000);
+    return () => { if (audioIntervalRef.current) clearInterval(audioIntervalRef.current); };
+  }, [hasPendingOrders, hasPendingCalls]);
 
-    // 컴포넌트가 언마운트되거나 상태가 변할 때 타이머 정리
-    return () => {
-      if (audioIntervalRef.current) {
-        clearInterval(audioIntervalRef.current);
-        audioIntervalRef.current = null;
-      }
-    };
-  }, [hasPendingOrders, hasPendingCalls]); // 주문 배열 전체가 아닌 '대기 상태의 유무'에만 반응하도록 최적화
-
-
-  // 우측 상단 팝업 알림 (시각적) 띄우기 로직
   useEffect(() => {
     const newOrders = orders.filter(o => o.status === 'pending' && !knownOrderIds.current.has(o.id));
     const newCalls = calls.filter(c => c.status === 'pending' && !knownCallIds.current.has(c.id));
