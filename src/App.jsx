@@ -8,12 +8,10 @@ import {
 } from 'lucide-react';
 
 // --- 파이어베이스(Firebase) 연동을 위한 모듈 로드 ---
-// Firebase 앱 초기화 및 Firestore(실시간 데이터베이스) 사용을 위한 함수들입니다.
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, onSnapshot, setDoc } from "firebase/firestore";
 
 // --- 고객님의 파이어베이스 설정값 적용 ---
-// Firebase 콘솔에서 발급받은 고유 프로젝트 식별 정보입니다.
 const firebaseConfig = {
   apiKey: "AIzaSyBpgZ2GJsSC8ZxNuEyct-oRcWXPLt2bptc",
   authDomain: "holeroomorder.firebaseapp.com",
@@ -23,12 +21,11 @@ const firebaseConfig = {
   appId: "1:167618977732:web:3a49ea5945ea2bdc470e91"
 };
 
-// 파이어베이스 초기화 (보안 인증 없이 테스트 모드로 접근하기 위해 Auth 기능은 제외됨)
+// 파이어베이스 초기화
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 // --- 초기 더미 데이터 세팅 ---
-// 데이터베이스가 완전히 비어있을 때 처음으로 채워 넣을 기본 메뉴 데이터입니다.
 const INITIAL_MENU = [
   { id: 'm1', name: '아메리카노', price: 4500, description: '최고급 원두로 내린 아메리카노', image: 'https://images.unsplash.com/photo-1551030173-122aabc4489c?auto=format&fit=crop&q=80&w=200&h=200', category: '음료' },
   { id: 'm2', name: '카페라떼', price: 5000, description: '부드러운 우유가 들어간 라떼', image: 'https://images.unsplash.com/photo-1570968915860-54d5c301fa9f?auto=format&fit=crop&q=80&w=200&h=200', category: '음료' },
@@ -36,7 +33,6 @@ const INITIAL_MENU = [
   { id: 'm4', name: '감자튀김', price: 6000, description: '바삭하게 튀겨낸 감자튀김과 케찹', image: 'https://images.unsplash.com/photo-1576107232684-1279f390859f?auto=format&fit=crop&q=80&w=200&h=200', category: '스낵' },
 ];
 
-// 데이터베이스가 완전히 비어있을 때 처음으로 채워 넣을 기본 매장(admin) 구조입니다.
 const INITIAL_STORES = {
   'admin': {
     password: 'admin',
@@ -54,52 +50,39 @@ const INITIAL_STORES = {
 
 // ==========================================
 // 최상위 메인 컴포넌트 (App)
-// 앱의 전반적인 상태(Firebase 동기화, 세션, 라우팅)를 관장합니다.
 // ==========================================
 export default function App() {
-  // [클라우드 데이터 상태 관리]
-  // storesLocal: 전체 매장의 정보(메뉴, 룸, 주문, 호출)를 담는 객체
-  // activeSessionsLocal: 현재 접속 중인 기기들의 온라인 상태를 기록하는 객체 (슈퍼바이저 모니터링용)
   const [storesLocal, setStoresLocal] = useState(null);
   const [activeSessionsLocal, setActiveSessionsLocal] = useState(null);
   
-  // [세션 유지 관리]
-  // 사용자가 F5(새로고침)를 눌러도 로그아웃되지 않도록 localStorage에서 세션을 꺼내옵니다.
+  // 세션 유지
   const [session, setSession] = useState(() => {
     const saved = localStorage.getItem('room_order_session_v4');
     return saved ? JSON.parse(saved) : null;
   });
   
-  // 전역 커스텀 모달(alert, confirm 대체)을 띄우기 위한 설정값 상태
   const [modalConfig, setModalConfig] = useState(null);
 
-  // 이벤트 리스너(beforeunload 등) 안에서 최신 상태를 참조하기 위해 useRef를 사용해 상태값을 동기화해 둡니다.
   const sessionRef = useRef(session);
   const activeSessionsRef = useRef(activeSessionsLocal);
   useEffect(() => { sessionRef.current = session; }, [session]);
   useEffect(() => { activeSessionsRef.current = activeSessionsLocal; }, [activeSessionsLocal]);
 
-  // 세션이 로그인되거나 로그아웃되어 변경될 때마다 로컬 스토리지에 즉시 반영합니다. (새로고침 방어)
   useEffect(() => {
     if (session) localStorage.setItem('room_order_session_v4', JSON.stringify(session));
     else localStorage.removeItem('room_order_session_v4');
   }, [session]);
 
-  // --- [중요] 1. 파이어베이스 실시간 동기화 세팅 ---
-  // 컴포넌트가 처음 마운트될 때 Firestore 데이터베이스와 연결(구독)합니다.
+  // 파이어베이스 실시간 동기화
   useEffect(() => {
-    // Firestore 내의 문서 경로를 지정합니다.
     const storesRef = doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'stores');
     const sessionsRef = doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions');
 
     let isInitialStores = true;
-    // onSnapshot: 데이터베이스의 내용이 바뀔 때마다 실시간으로 이 콜백 함수가 실행됩니다.
     const unsubStores = onSnapshot(storesRef, (docSnap) => {
       if (docSnap.exists()) {
-        // DB에 데이터가 있으면 로컬 상태(storesLocal)를 업데이트하여 화면을 리렌더링시킵니다.
         setStoresLocal(docSnap.data().data);
       } else if (isInitialStores) {
-        // DB가 텅 비어있다면, 초기 더미 데이터를 생성해 DB에 밀어 넣습니다.
         setDoc(storesRef, { data: INITIAL_STORES }).catch(console.error); 
       }
       isInitialStores = false;
@@ -115,12 +98,10 @@ export default function App() {
       isInitialSessions = false;
     }, (error) => console.error(error));
 
-    // 컴포넌트가 언마운트될 때(앱 종료 등) 구독을 해제합니다. 메모리 누수 방지.
     return () => { unsubStores(); unsubSessions(); };
   }, []);
 
-  // --- 2. 온라인 상태 자동 복구 로직 ---
-  // 새로고침을 하면 메모리상의 연결이 끊어져 오프라인으로 뜰 수 있으므로, 세션이 살아있다면 다시 '온라인'으로 DB에 기록합니다.
+  // 온라인 상태 자동 복구 로직
   useEffect(() => {
     if (!session || !activeSessionsLocal) return;
     let key;
@@ -134,8 +115,7 @@ export default function App() {
     }
   }, [session, activeSessionsLocal]);
 
-  // --- 3. 접속 종료 (브라우저 닫기) 시 세션 정리 ---
-  // 사용자가 브라우저 탭을 완전히 닫거나 이동할 때, 해당 기기의 상태를 오프라인으로 만들기 위해 기록을 지웁니다.
+  // 접속 종료(브라우저 닫기) 시 세션 정리
   useEffect(() => {
     const handleUnload = () => {
       const currentSession = sessionRef.current;
@@ -147,18 +127,14 @@ export default function App() {
         setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions'), { data: parsed });
       }
     };
-    // 브라우저 내장 이벤트 'beforeunload' 활용
     window.addEventListener('beforeunload', handleUnload);
     return () => window.removeEventListener('beforeunload', handleUnload);
   }, []);
 
-  // --- [버그수정 및 헬퍼 함수] Firebase 통신 헬퍼 ---
-  
-  // 전체 매장 데이터를 덮어쓸 때 사용하는 함수
+  // 클라우드 데이터 전송 헬퍼 함수
   const setStores = (updateFn) => {
     setStoresLocal(prev => {
       const newVal = typeof updateFn === 'function' ? updateFn(prev) : updateFn;
-      // 비동기 처리(setTimeout): React의 렌더링 흐름과 Firebase 저장 흐름이 엉켜 백화현상(White Screen)이 일어나는 것을 방지합니다.
       setTimeout(() => {
         setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'stores'), { data: newVal }).catch(console.error);
       }, 0);
@@ -166,13 +142,11 @@ export default function App() {
     });
   };
 
-  // 특정 매장(adminId)의 특정 키(orders, calls, rooms 등)만 안전하게 업데이트하는 핵심 함수
   const updateStore = (adminId, key, updateFn) => {
     setStoresLocal(prev => {
-      if (!prev || !prev[adminId]) return prev; // 매장이 없으면 무시
+      if (!prev || !prev[adminId]) return prev;
       
       const isArrayKey = ['orders', 'calls', 'menuItems', 'rooms'].includes(key);
-      // undefined 참조 에러 방지: 배열이어야 할 데이터가 비어있으면(undefined), 빈 배열([])로 기본값을 할당합니다. (백화현상 1차 차단)
       const currentVal = prev[adminId][key] || (isArrayKey ? [] : null);
       
       const updatedVal = typeof updateFn === 'function' ? updateFn(currentVal) : updateFn;
@@ -184,7 +158,6 @@ export default function App() {
         }
       };
       
-      // Firebase 통신 비동기 분리 (백화현상 2차 차단)
       setTimeout(() => {
         setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'stores'), { data: newStores }).catch(console.error);
       }, 0);
@@ -192,18 +165,6 @@ export default function App() {
     });
   };
 
-  // 접속 세션 정보를 업데이트하는 헬퍼 함수
-  const setActiveSessions = (updateFn) => {
-    setActiveSessionsLocal(prev => {
-      const newVal = typeof updateFn === 'function' ? updateFn(prev) : updateFn;
-      setTimeout(() => {
-        setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions'), { data: newVal }).catch(console.error);
-      }, 0);
-      return newVal;
-    });
-  };
-
-  // 안전하게 룸의 '이름(예: 1번 방)'을 찾아 반환하는 유틸 함수
   const getRoomName = (adminId, roomId) => {
     const safeStores = storesLocal || {};
     const safeStore = safeStores[adminId] || {};
@@ -211,8 +172,7 @@ export default function App() {
     return rooms.find(r => r.id === roomId)?.name || '알 수 없는 룸';
   };
 
-  // --- 파이어베이스 연결 대기 UI ---
-  // 앱 최초 실행 시, 서버에서 데이터를 다 가져오기 전까지 보여주는 로딩 스피너입니다.
+  // 로딩 화면
   if (!storesLocal || !activeSessionsLocal) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white font-sans">
@@ -223,31 +183,14 @@ export default function App() {
     );
   }
 
-  // 로그인 처리: 로그인 성공 시 세션 객체를 저장하고, 온라인 상태로 등록
   const handleLogin = (newSession) => {
     setSession(newSession);
-    setActiveSessions(prev => {
-      const next = { ...prev };
-      if (newSession.role === 'admin') next[`admin_${newSession.adminId}`] = true;
-      if (newSession.role === 'tablet') next[`tablet_${newSession.adminId}_${newSession.roomId}`] = true;
-      if (newSession.role === 'supervisor') next['supervisor'] = true;
-      return next;
-    });
   };
 
-  // 로그아웃 처리: 온라인 상태를 삭제하고, 세션을 초기화
   const handleLogout = () => {
-    setActiveSessions(prev => {
-      const next = { ...prev };
-      if (session.role === 'admin') delete next[`admin_${session.adminId}`];
-      if (session.role === 'tablet') delete next[`tablet_${session.adminId}_${session.roomId}`];
-      if (session.role === 'supervisor') delete next['supervisor'];
-      return next;
-    });
     setSession(null);
   };
 
-  // 커스텀 모달 호출용 함수들 (alert, confirm, prompt 창을 브라우저 제약 없이 띄웁니다.)
   const showModal = (type, title, message, defaultValue = '') => {
     return new Promise((resolve) => {
       setModalConfig({
@@ -261,23 +204,19 @@ export default function App() {
   const showConfirm = (title, message) => showModal('confirm', title, message);
   const showPrompt = (title, message, defaultValue = '') => showModal('prompt', title, message, defaultValue);
 
-  // --- 뷰 라우팅 (화면 분기) ---
-  // 세션이 없으면 로그인 화면을 렌더링
+  // 뷰 라우팅
   if (!session) {
     return <AuthView stores={storesLocal} handleLogin={handleLogin} showAlert={showAlert} />;
   }
 
-  // 세션 역할(role)에 따라 각각의 권한 화면을 렌더링합니다.
   return (
     <>
-      {/* 슈퍼바이저 (마스터 관리자) 뷰 */}
       {session.role === 'supervisor' && (
         <SupervisorView 
           stores={storesLocal} setStores={setStores} activeSessions={activeSessionsLocal}
           logout={handleLogout} showAlert={showAlert} showConfirm={showConfirm}
         />
       )}
-      {/* 매장 관리자(PC 카운터) 뷰 */}
       {session.role === 'admin' && (
         <AdminView 
           adminId={session.adminId} storeData={storesLocal[session.adminId]}
@@ -285,27 +224,23 @@ export default function App() {
           logout={handleLogout} showAlert={showAlert} showConfirm={showConfirm}
         />
       )}
-      {/* 고객 사용자(태블릿) 뷰 */}
       {session.role === 'tablet' && (
         <TabletView 
           adminId={session.adminId} storeData={storesLocal[session.adminId]} roomId={session.roomId}
           updateStore={updateStore} logout={handleLogout} showAlert={showAlert} showConfirm={showConfirm}
         />
       )}
-      {/* 공통 모달 렌더러 (설정값이 있을 때만 모달이 화면 위를 덮습니다) */}
       {modalConfig && <GlobalModal config={modalConfig} />}
     </>
   );
 }
 
 // ==========================================
-// 로그인/접속 뷰 컴포넌트
+// 로그인/접속 뷰
 // ==========================================
 function AuthView({ stores, handleLogin, showAlert }) {
-  // tab: 현재 선택된 로그인 탭 (admin, tablet, supervisor 중 하나)
   const [tab, setTab] = useState('admin');
 
-  // 로그인 폼 제출(Submit) 핸들러
   const handleSubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -313,14 +248,12 @@ function AuthView({ stores, handleLogin, showAlert }) {
     const pw = fd.get('password');
 
     if (tab === 'supervisor') {
-      // 슈퍼바이저는 하드코딩된 고정 ID/PW를 사용합니다.
       if (id === 'ratel' && pw === '1q2w3e4r!') {
         handleLogin({ role: 'supervisor' });
       } else {
         await showAlert('인증 실패', '슈퍼바이저 계정 정보가 일치하지 않습니다.');
       }
     } else if (tab === 'admin') {
-      // 매장 관리자 로그인 검증
       const safeStores = stores || {};
       if (safeStores[id] && safeStores[id].password === pw) {
         handleLogin({ role: 'admin', adminId: id });
@@ -328,7 +261,6 @@ function AuthView({ stores, handleLogin, showAlert }) {
         await showAlert('로그인 실패', '매장 ID 또는 비밀번호가 일치하지 않습니다.');
       }
     } else {
-      // 태블릿 로그인 검증: 모든 매장을 순회하며 룸 고유 접속 코드를 찾습니다.
       let found = false;
       const safeStores = stores || {};
       for (const [adminId, store] of Object.entries(safeStores)) {
@@ -347,12 +279,10 @@ function AuthView({ stores, handleLogin, showAlert }) {
 
   return (
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 font-sans relative overflow-hidden">
-      {/* 배경 블러 효과 장식 */}
       <div className="absolute top-[-10%] left-[-10%] w-[50vw] h-[50vw] bg-blue-600/20 rounded-full blur-[100px]"></div>
       <div className="absolute bottom-[-10%] right-[-10%] w-[50vw] h-[50vw] bg-indigo-600/20 rounded-full blur-[100px]"></div>
 
       <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden z-10">
-        {/* 상단 탭 메뉴 */}
         <div className="flex text-center border-b border-gray-100 bg-gray-50/50 text-sm">
           <button onClick={() => setTab('admin')} className={`flex-1 py-4 font-bold transition-colors ${tab === 'admin' ? 'bg-white text-blue-600 border-b-2 border-blue-600' : 'text-gray-400 hover:text-gray-600'}`}>매장 관리자</button>
           <button onClick={() => setTab('tablet')} className={`flex-1 py-4 font-bold transition-colors ${tab === 'tablet' ? 'bg-white text-blue-600 border-b-2 border-blue-600' : 'text-gray-400 hover:text-gray-600'}`}>룸 태블릿</button>
@@ -402,25 +332,20 @@ function AuthView({ stores, handleLogin, showAlert }) {
 }
 
 // ==========================================
-// 슈퍼바이저 뷰 (최고 관리자 전용 기능)
-// 모든 매장을 생성/삭제하고, 룸(태블릿) 계정을 통합 관리하며 접속 상태를 실시간 관제합니다.
+// 슈퍼바이저 뷰
 // ==========================================
 function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, showConfirm }) {
   const [activeTab, setActiveTab] = useState('manage'); 
-  
-  // 모달 폼 제어를 위한 상태 (null이면 폼 닫힘, 객체면 해당 정보로 폼 열림)
   const [storeForm, setStoreForm] = useState(null); 
   const [roomForm, setRoomForm] = useState(null); 
 
   const safeStores = stores || {};
 
-  // 새 매장 등록 및 기존 매장 수정 처리
   const handleStoreSubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const adminId = storeForm.mode === 'add' ? fd.get('adminId') : storeForm.adminId;
     
-    // 신규 추가 시 ID 중복 방지
     if (storeForm.mode === 'add' && safeStores[adminId]) {
       await showAlert('오류', '이미 존재하는 매장 ID입니다.');
       return;
@@ -432,7 +357,7 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
       return {
         ...safePrev,
         [adminId]: {
-          ...currentStore, // 수정 시에는 기존의 데이터(메뉴, 주문 등)를 그대로 유지합니다.
+          ...currentStore, 
           password: fd.get('password'),
           storeName: fd.get('storeName'),
           rooms: currentStore.rooms || [],
@@ -442,21 +367,19 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
         }
       };
     });
-    setStoreForm(null); // 모달 닫기
+    setStoreForm(null);
   };
 
-  // 매장 완전 삭제
   const deleteStore = async (adminId) => {
     if(await showConfirm('매장 삭제', '이 매장과 소속된 모든 룸, 주문 데이터를 영구히 삭제하시겠습니까?')) {
       setStores(prev => {
         const copy = {...(prev || {})};
-        delete copy[adminId]; // 객체에서 해당 매장 키를 완전히 지웁니다.
+        delete copy[adminId];
         return copy;
       });
     }
   };
 
-  // 룸 계정 신규 발급 및 수정
   const handleRoomSubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -466,7 +389,6 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
     const currentStore = safeStores[adminId] || {};
     const storeRooms = currentStore.rooms || [];
 
-    // 같은 매장 내에서 태블릿 접속 로그인 ID 중복 방지
     const isDuplicate = storeRooms.some(r => r.loginId === loginId && r.id !== roomForm.roomId);
     if (isDuplicate) {
       await showAlert('오류', '이 매장 내에 이미 존재하는 룸 ID입니다.');
@@ -488,7 +410,6 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
     setRoomForm(null);
   };
 
-  // 특정 룸 삭제 처리
   const deleteRoom = async (adminId, roomId) => {
     if(await showConfirm('룸 삭제', '이 룸의 접속 계정을 영구히 삭제하시겠습니까?')) {
       setStores(prev => {
@@ -505,7 +426,6 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
 
   return (
     <div className="flex h-screen bg-gray-100 font-sans">
-      {/* 좌측 네비게이션 사이드바 */}
       <div className="w-64 bg-indigo-950 text-white flex flex-col">
         <div className="p-6 text-lg font-black border-b border-indigo-900 flex items-center gap-2">
           <ShieldCheck className="w-7 h-7 text-indigo-400" />
@@ -522,7 +442,6 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
         </div>
       </div>
 
-      {/* 우측 메인 콘텐츠 영역 */}
       <div className="flex-1 flex flex-col overflow-hidden relative">
         <header className="bg-white shadow-sm p-5 flex justify-between items-center z-10">
           <h1 className="text-xl font-bold text-gray-800">
@@ -531,7 +450,6 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
         </header>
 
         <main className="flex-1 overflow-y-auto p-6">
-          {/* 매장 및 계정 관리 탭 */}
           {activeTab === 'manage' && (
             <div className="max-w-5xl mx-auto space-y-6">
               <div className="flex justify-between items-center">
@@ -541,7 +459,6 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
                 </button>
               </div>
 
-              {/* 각 매장별 카드 렌더링 */}
               {Object.entries(safeStores).map(([adminId, store]) => {
                 const safeStore = store || {};
                 const storeRooms = safeStore.rooms || [];
@@ -550,7 +467,6 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
 
                 return (
                   <div key={adminId} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-                    {/* 매장 헤더 (매장명, 관리자 계정정보, 버튼들) */}
                     <div className="bg-gray-50 p-5 border-b border-gray-200 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
                       <div>
                         <div className="flex items-center gap-2 mb-1">
@@ -571,7 +487,6 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
                       </div>
                     </div>
 
-                    {/* 해당 매장에 소속된 룸(태블릿) 리스트 */}
                     <div className="p-5 bg-white">
                       <h4 className="text-sm font-bold text-gray-400 mb-3 flex items-center gap-2"><Smartphone className="w-4 h-4"/> 할당된 룸(태블릿) 목록</h4>
                       {storeRooms.length === 0 ? (
@@ -601,7 +516,6 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
             </div>
           )}
 
-          {/* 모니터링 (실시간 접속 관제) 탭 */}
           {activeTab === 'monitor' && (
             <div className="max-w-6xl mx-auto">
               <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-xl mb-6 flex items-center gap-3">
@@ -614,8 +528,6 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
                   const safeStore = store || {};
                   const storeName = safeStore.storeName || '알 수 없는 매장';
                   const storeRooms = safeStore.rooms || [];
-                  
-                  // 해당 매장 관리자(PC)가 접속해 있는지 Firebase 세션으로 확인합니다.
                   const isAdminOnline = activeSessions[`admin_${adminId}`];
                   
                   return (
@@ -631,7 +543,6 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
                       </div>
                       
                       <div className="p-4 grid grid-cols-2 gap-3">
-                        {/* 해당 매장의 각 룸(태블릿)들이 접속해 있는지 확인하여 상태 아이콘을 띄워줍니다. */}
                         {storeRooms.map(room => {
                           const isTabletOnline = activeSessions[`tablet_${adminId}_${room.id}`];
                           return (
@@ -652,7 +563,6 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
         </main>
       </div>
 
-      {/* 모달 폼: 매장 신규 등록 / 정보 수정 */}
       {storeForm && (
         <ModalWrapper title={storeForm.mode === 'add' ? '새 매장 등록' : '매장 정보 수정'} onClose={() => setStoreForm(null)}>
           <form onSubmit={handleStoreSubmit} className="space-y-4">
@@ -667,7 +577,6 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
         </ModalWrapper>
       )}
 
-      {/* 모달 폼: 태블릿 룸 계정 발급 / 수정 */}
       {roomForm && (
         <ModalWrapper title={roomForm.mode === 'add' ? '룸 계정 발급' : '룸 계정 수정'} onClose={() => setRoomForm(null)}>
           <form onSubmit={handleRoomSubmit} className="space-y-4">
@@ -688,20 +597,16 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
   );
 }
 
-// 온라인 상태 표시용 작은 동그라미 불빛 아이콘 컴포넌트
 function StatusIndicator({ online, small }) {
   if (online) return (
     <div className="relative flex items-center justify-center">
-      {/* online이 true면 녹색 불빛이 깜빡(핑)이도록 효과 부여 */}
       <div className={`absolute bg-green-400 rounded-full animate-ping opacity-75 ${small ? 'w-3 h-3' : 'w-4 h-4'}`}></div>
       <div className={`relative bg-green-500 rounded-full ${small ? 'w-2 h-2' : 'w-3 h-3'}`}></div>
     </div>
   );
-  // 오프라인이면 회색 원
   return <div className={`bg-gray-300 rounded-full ${small ? 'w-2 h-2' : 'w-3 h-3'}`}></div>;
 }
 
-// 폼 입력 모달을 띄울 때 배경을 반투명하게 덮어주는 재사용 래퍼 컴포넌트
 function ModalWrapper({ title, children, onClose }) {
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
@@ -715,14 +620,11 @@ function ModalWrapper({ title, children, onClose }) {
 
 // ==========================================
 // 매장 관리자 뷰 (Admin PC용)
-// 소속된 매장의 메뉴를 관리하고, 태블릿에서 날아오는 주문/호출을 처리합니다.
 // ==========================================
 function AdminView({ adminId, storeData, updateStore, getRoomName, logout, showAlert, showConfirm }) {
-  // 현재 보고 있는 탭 (주문현황 / 메뉴관리 / 룸퇴실관리)
   const [activeTab, setActiveTab] = useState('orders'); 
-  const [popups, setPopups] = useState([]); // 우측 상단에 띄울 주문/호출 푸시 알림 박스들
+  const [popups, setPopups] = useState([]);
   
-  // 파이어베이스에서 넘어온 데이터가 혹여나 없더라도 앱이 죽지 않도록(백화현상 방지) 기본 배열([])을 보장합니다.
   const safeStoreData = storeData || {};
   const orders = safeStoreData.orders || [];
   const calls = safeStoreData.calls || [];
@@ -730,53 +632,128 @@ function AdminView({ adminId, storeData, updateStore, getRoomName, logout, showA
   const rooms = safeStoreData.rooms || [];
   const storeName = safeStoreData.storeName || '알 수 없는 매장';
 
-  // 알림 중복 방지를 위해 이미 한 번 알림을 띄운 주문과 호출의 ID를 기억해둡니다.
+  // 시각적 팝업을 띄운 ID들을 기억 (알림 팝업 전용)
   const knownOrderIds = useRef(new Set(orders.map(o => o.id)));
   const knownCallIds = useRef(new Set(calls.map(c => c.id)));
 
-  // 브라우저 내장 오디오 API를 사용하여 태블릿에서 주문/호출이 오면 '띵동' 소리를 냅니다.
-  const playSound = () => {
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine'; osc.frequency.setValueAtTime(880, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.1);
-      gain.gain.setValueAtTime(0.1, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.start(); osc.stop(ctx.currentTime + 0.3);
-    } catch(e) {}
+  // === 오디오 엔진 통합 및 루프 시스템 ===
+  const audioCtxRef = useRef(null);
+  const audioIntervalRef = useRef(null);
+
+  // AudioContext 초기화 및 반환 (브라우저 정책 우회 및 재사용)
+  const getAudioCtx = () => {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume();
+    }
+    return audioCtxRef.current;
   };
 
-  // 새로운 주문이나 호출 데이터가 파이어베이스로부터 도착할 때마다 감지하여 알림 팝업과 소리를 발생시킵니다.
+  // 1. 주문 알림 소리 (딩동! 경쾌하고 밝은 소리)
+  const playOrderSound = () => {
+    try {
+      const ctx = getAudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine'; // 부드러운 파형
+      osc.frequency.setValueAtTime(880, ctx.currentTime); // 라(A5)
+      osc.frequency.setValueAtTime(1318.51, ctx.currentTime + 0.15); // 미(E6)
+      
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.4);
+    } catch (e) {}
+  };
+
+  // 2. 호출 알림 소리 (삐빕! 주의를 끄는 묵직한 소리)
+  const playCallSound = () => {
+    try {
+      const ctx = getAudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle'; // 약간 날카로운 파형
+      osc.frequency.setValueAtTime(523.25, ctx.currentTime); // 도(C5)
+      osc.frequency.setValueAtTime(440, ctx.currentTime + 0.2); // 라(A4)
+      
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.5);
+    } catch (e) {}
+  };
+
+  // 현재 대기 중인 항목이 있는지 확인하는 불리언(Boolean) 값
+  const hasPendingOrders = orders.some(o => o.status === 'pending');
+  const hasPendingCalls = calls.some(c => c.status === 'pending');
+
+  // 오디오 반복(Loop) 컨트롤 이펙트
   useEffect(() => {
-    // 아직 내가 알림을 받지 않은(knownSet에 없는) 'pending(대기)' 상태의 새로운 주문과 호출만 골라냅니다.
+    // 기존에 돌고 있던 반복 타이머가 있다면 초기화
+    if (audioIntervalRef.current) {
+      clearInterval(audioIntervalRef.current);
+      audioIntervalRef.current = null;
+    }
+
+    // 대기 중인 주문이나 호출이 아무것도 없다면 즉시 종료
+    if (!hasPendingOrders && !hasPendingCalls) return;
+
+    // 소리를 재생하는 래퍼 함수 (주문과 호출이 겹칠 경우 0.5초 시차를 둠)
+    const triggerSound = () => {
+      if (hasPendingOrders && hasPendingCalls) {
+        playOrderSound();
+        setTimeout(playCallSound, 500); // 소리가 겹치지 않도록 0.5초 간격으로 재생
+      } else if (hasPendingOrders) {
+        playOrderSound();
+      } else if (hasPendingCalls) {
+        playCallSound();
+      }
+    };
+
+    // 대기 건이 생기자마자 즉시 1회 재생
+    triggerSound();
+
+    // 이후 2초(2000ms) 간격으로 무한 반복
+    audioIntervalRef.current = setInterval(triggerSound, 2000);
+
+    // 컴포넌트가 언마운트되거나 상태가 변할 때 타이머 정리
+    return () => {
+      if (audioIntervalRef.current) {
+        clearInterval(audioIntervalRef.current);
+        audioIntervalRef.current = null;
+      }
+    };
+  }, [hasPendingOrders, hasPendingCalls]); // 주문 배열 전체가 아닌 '대기 상태의 유무'에만 반응하도록 최적화
+
+
+  // 우측 상단 팝업 알림 (시각적) 띄우기 로직
+  useEffect(() => {
     const newOrders = orders.filter(o => o.status === 'pending' && !knownOrderIds.current.has(o.id));
     const newCalls = calls.filter(c => c.status === 'pending' && !knownCallIds.current.has(c.id));
     
-    let shouldAlert = false;
     newOrders.forEach(o => {
       knownOrderIds.current.add(o.id);
       setPopups(p => [...p, { id: 'pop_'+Date.now()+Math.random(), type: 'order', refId: o.id, message: `[${getRoomName(o.roomId)}] 신규 주문이 들어왔습니다!` }]);
-      shouldAlert = true;
     });
     newCalls.forEach(c => {
       knownCallIds.current.add(c.id);
       setPopups(p => [...p, { id: 'pop_'+Date.now()+Math.random(), type: 'call', refId: c.id, message: `[${getRoomName(c.roomId)}]에서 직원을 호출했습니다!` }]);
-      shouldAlert = true;
     });
-
-    // 새로운 건이 1건이라도 있으면 소리를 재생
-    if (shouldAlert) playSound();
   }, [orders, calls]);
 
-  // 특정 주문을 '처리 완료' 상태로 만듭니다. (팝업도 자동 삭제)
   const completeOrder = (id) => {
     updateStore(adminId, 'orders', prev => prev.map(o => o.id === id ? { ...o, status: 'completed' } : o));
     setPopups(prev => prev.filter(p => p.refId !== id));
   };
 
-  // 특정 직원 호출을 '확인 완료' 상태로 만듭니다.
   const resolveCall = (id) => {
     updateStore(adminId, 'calls', prev => prev.map(c => c.id === id ? { ...c, status: 'resolved' } : c));
     setPopups(prev => prev.filter(p => p.refId !== id));
@@ -784,7 +761,6 @@ function AdminView({ adminId, storeData, updateStore, getRoomName, logout, showA
 
   return (
     <div className="flex h-screen bg-gray-100 font-sans">
-      {/* 관리자 좌측 네비게이션 메뉴 */}
       <div className="w-64 bg-slate-900 text-white flex flex-col">
         <div className="p-6 text-xl font-black border-b border-slate-800 flex items-center gap-2">
           <MonitorPlay className="w-6 h-6 text-blue-400" /> 매장 관리
@@ -805,7 +781,6 @@ function AdminView({ adminId, storeData, updateStore, getRoomName, logout, showA
         </div>
       </div>
 
-      {/* 탭에 따라 메인 컴포넌트 교체 표시 */}
       <div className="flex-1 flex flex-col overflow-hidden relative">
         <header className="bg-white shadow-sm p-5 flex justify-between items-center z-10">
           <h1 className="text-xl font-bold text-gray-800">
@@ -821,13 +796,11 @@ function AdminView({ adminId, storeData, updateStore, getRoomName, logout, showA
           {activeTab === 'rooms' && <AdminRoomsReadOnly rooms={rooms} adminId={adminId} updateStore={updateStore} showAlert={showAlert} showConfirm={showConfirm} />}
         </main>
 
-        {/* 새 알림 발생 시 우측 상단에 쌓이는 푸시 알림 UI */}
         <div className="absolute top-6 right-6 flex flex-col gap-3 z-50">
           {popups.map(popup => (
             <div key={popup.id} className={`text-white px-6 py-4 rounded-xl shadow-2xl flex flex-col gap-3 min-w-[300px] animate-bounce ${popup.type === 'call' ? 'bg-red-600' : 'bg-blue-600'}`}>
               <div className="flex items-center gap-3"><AlertCircle className="w-6 h-6 flex-shrink-0" /><span className="font-medium text-lg">{popup.message}</span></div>
               <div className="flex justify-end gap-2">
-                {/* 팝업 안에서도 즉시 처리 버튼 제공 */}
                 {popup.type === 'call' && <button onClick={() => resolveCall(popup.refId)} className="bg-white text-red-600 px-4 py-1.5 rounded-lg font-bold text-sm hover:bg-red-50">호출 확인</button>}
                 {popup.type === 'order' && <button onClick={() => completeOrder(popup.refId)} className="bg-white text-blue-600 px-4 py-1.5 rounded-lg font-bold text-sm hover:bg-blue-50">주문 처리완료</button>}
                 <button onClick={() => setPopups(p => p.filter(x => x.id !== popup.id))} className="bg-black/20 hover:bg-black/30 px-3 py-1.5 rounded-lg text-sm text-white">닫기</button>
@@ -840,11 +813,9 @@ function AdminView({ adminId, storeData, updateStore, getRoomName, logout, showA
   );
 }
 
-// 룸 퇴실(데이터 리셋) 전용 컴포넌트
 function AdminRoomsReadOnly({ rooms, adminId, updateStore, showAlert, showConfirm }) {
   const handleCheckout = async (roomName, roomId) => {
     if(await showConfirm('퇴실 및 초기화', `[${roomName}]의 손님이 퇴실하셨나요?\n확인을 누르면 해당 방의 모든 주문 명세와 호출 내역이 초기화됩니다.`)) {
-      // 해당 룸과 관련된 주문, 호출 기록을 필터로 걸러내서 완벽히 제거합니다.
       updateStore(adminId, 'orders', prev => prev.filter(o => o.roomId !== roomId));
       updateStore(adminId, 'calls', prev => prev.filter(c => c.roomId !== roomId));
       await showAlert('초기화 완료', `${roomName}의 주문 및 호출 내역이 초기화되었습니다.`);
@@ -872,7 +843,6 @@ function AdminRoomsReadOnly({ rooms, adminId, updateStore, showAlert, showConfir
   );
 }
 
-// 사이드바 버튼 반복 렌더링용 유틸 컴포넌트
 function SidebarBtn({ icon, label, active, onClick, badge }) {
   return (
     <button onClick={onClick} className={`w-full flex items-center justify-between p-3 rounded-lg transition-colors ${active ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}`}>
@@ -882,22 +852,15 @@ function SidebarBtn({ icon, label, active, onClick, badge }) {
   );
 }
 
-// 주문/호출 대시보드 컴포넌트 (특정 룸 필터링 기능 포함)
 function AdminOrders({ orders, calls, rooms, completeOrder, resolveCall, getRoomName, adminId, updateStore, showConfirm }) {
-  // 전체보기 또는 특정 룸만 보기 위한 필터 상태값
   const [selectedRoomFilter, setSelectedRoomFilter] = useState('all');
-  
-  // 아직 처리되지 않은 호출만 걸러냄
   const pendingCalls = calls.filter(c => c.status === 'pending');
-  // 필터값에 맞춰 보여줄 주문 목록 필터링 (전체 혹은 선택한 방)
   const filteredOrders = orders.filter(o => selectedRoomFilter === 'all' || o.roomId === selectedRoomFilter);
 
-  // 특정 주문 1건 삭제
   const deleteOrder = async (id) => {
     if(await showConfirm('주문 삭제', '주문 내역을 영구 삭제하시겠습니까?')) updateStore(adminId, 'orders', prev => prev.filter(o => o.id !== id));
   };
 
-  // 현재 필터된 룸의 주문을 한꺼번에 비워버리는 기능 (일괄 삭제)
   const deleteAllOrders = async () => {
     const msg = selectedRoomFilter === 'all' 
       ? '전체 주문 내역을 일괄 영구 삭제하시겠습니까?' 
@@ -905,15 +868,14 @@ function AdminOrders({ orders, calls, rooms, completeOrder, resolveCall, getRoom
       
     if (await showConfirm('주문 일괄 삭제', msg)) {
       updateStore(adminId, 'orders', prev => {
-        if (selectedRoomFilter === 'all') return []; // 전체삭제면 텅 빈 배열로 바꿈
-        return prev.filter(o => o.roomId !== selectedRoomFilter); // 특정 방이면 그 방의 데이터만 제거
+        if (selectedRoomFilter === 'all') return [];
+        return prev.filter(o => o.roomId !== selectedRoomFilter);
       });
     }
   };
 
   return (
     <div className="flex flex-col gap-8">
-      {/* 호출 리스트 (직원 호출이 들어왔을 때만 상단에 표시됩니다) */}
       {pendingCalls.length > 0 && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-5 shadow-sm">
           <h2 className="text-red-700 font-bold text-lg mb-4 flex items-center gap-2"><Bell className="w-5 h-5" /> 진행 중인 직원 호출</h2>
@@ -928,14 +890,12 @@ function AdminOrders({ orders, calls, rooms, completeOrder, resolveCall, getRoom
         </div>
       )}
 
-      {/* 주문 리스트 및 필터 컨트롤 영역 */}
       <div>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
           <h2 className="text-gray-700 font-bold text-lg flex items-center gap-2">
             <ShoppingCart className="w-5 h-5" /> 주문 내역
           </h2>
           
-          {/* 룸별 필터링 드롭다운 메뉴 및 일괄삭제 버튼 */}
           <div className="flex items-center gap-2">
             <select
               value={selectedRoomFilter}
@@ -957,7 +917,6 @@ function AdminOrders({ orders, calls, rooms, completeOrder, resolveCall, getRoom
           </div>
         </div>
 
-        {/* 필터 결과에 따라 화면 렌더링 */}
         {filteredOrders.length === 0 ? <div className="text-gray-500 py-10 text-center bg-white rounded-xl border border-dashed border-gray-300">표시할 주문이 없습니다.</div> : (
           <div className="grid gap-4">
             {[...filteredOrders].reverse().map(order => (
@@ -986,18 +945,15 @@ function AdminOrders({ orders, calls, rooms, completeOrder, resolveCall, getRoom
   );
 }
 
-// 메뉴(상품) 관리 (추가/수정/삭제) 컴포넌트
 function AdminMenu({ menuItems, adminId, updateStore, showConfirm }) {
-  const [editingItem, setEditingItem] = useState(null); // 수정 중인 객체를 담아 모달에 전달
+  const [editingItem, setEditingItem] = useState(null);
 
   const handleSave = (e) => {
     e.preventDefault();
     const formData = new FormData(e.target);
     const newItem = { id: editingItem.id || 'm_' + Date.now(), name: formData.get('name'), price: parseInt(formData.get('price'), 10), description: formData.get('description'), category: formData.get('category'), image: formData.get('image') || 'https://via.placeholder.com/200?text=No+Image' };
-    
-    // id가 있으면(수정 상태면) 기존 요소를 찾아 교체하고, 없으면 신규 배열 요소로 추가
     updateStore(adminId, 'menuItems', prev => editingItem.id ? prev.map(m => m.id === newItem.id ? newItem : m) : [...prev, newItem]);
-    setEditingItem(null); // 모달 닫기
+    setEditingItem(null);
   };
 
   const deleteItem = async (id) => {
@@ -1028,7 +984,6 @@ function AdminMenu({ menuItems, adminId, updateStore, showConfirm }) {
         ))}
       </div>
 
-      {/* 메뉴 작성/수정 모달창 */}
       {editingItem && (
         <ModalWrapper title={editingItem.id ? '메뉴 수정' : '새 메뉴 추가'} onClose={() => setEditingItem(null)}>
           <form onSubmit={handleSave} className="space-y-4">
@@ -1046,16 +1001,13 @@ function AdminMenu({ menuItems, adminId, updateStore, showConfirm }) {
 }
 
 // ==========================================
-// 사용자 뷰 (태블릿 전용)
-// 방 손님이 메뉴를 선택하고, 주문 전송 및 직원 호출을 합니다.
+// 사용자 뷰 (태블릿)
 // ==========================================
 function TabletView({ adminId, storeData, roomId, updateStore, logout, showAlert }) {
-  // 태블릿 로컬 상태 (장바구니와 카테고리 필터)
   const [cart, setCart] = useState([]);
   const [activeCategory, setActiveCategory] = useState('전체');
-  const [showHistoryModal, setShowHistoryModal] = useState(false); // 주문 명세서 창 상태
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
   
-  // 파이어베이스에서 넘겨받은 매장 전역 데이터를 안전하게 초기화합니다.
   const safeStoreData = storeData || {};
   const menuItems = safeStoreData.menuItems || [];
   const orders = safeStoreData.orders || [];
@@ -1063,38 +1015,29 @@ function TabletView({ adminId, storeData, roomId, updateStore, logout, showAlert
   const storeName = safeStoreData.storeName || '알 수 없는 매장';
 
   const currentRoom = rooms.find(r => r.id === roomId);
-  const categories = ['전체', ...new Set(menuItems.map(m => m.category))]; // 전체보기 탭 포함
+  const categories = ['전체', ...new Set(menuItems.map(m => m.category))];
   const filteredMenu = activeCategory === '전체' ? menuItems : menuItems.filter(m => m.category === activeCategory);
 
   const cartTotal = cart.reduce((sum, cartItem) => sum + (cartItem.item.price * cartItem.quantity), 0);
-  
-  // 현재 접속 중인 룸이 지금까지 시킨 모든 주문 내역
   const myOrders = orders.filter(o => o.roomId === roomId);
   const totalOrderedAmount = myOrders.reduce((sum, order) => sum + order.total, 0);
 
-  // 장바구니 추가 로직
   const addToCart = (item) => {
     const existing = cart.find(c => c.item.id === item.id);
-    // 이미 담긴 상품이면 수량만 1 증가
     if (existing) setCart(cart.map(c => c.item.id === item.id ? { ...c, quantity: c.quantity + 1 } : c));
     else setCart([...cart, { item, quantity: 1 }]);
   };
 
-  // 장바구니 수량 조절. 수량이 0이 되면 항목에서 제거합니다.
   const updateQuantity = (id, delta) => setCart(cart.map(c => c.item.id === id ? (c.quantity + delta > 0 ? { ...c, quantity: c.quantity + delta } : null) : c).filter(Boolean));
 
-  // 주문 접수 (Firestore 통신)
   const placeOrder = async () => {
     if (cart.length === 0) return;
     const newOrder = { id: 'ord_' + Date.now() + Math.random(), roomId, items: cart.map(c => ({ name: c.item.name, quantity: c.quantity, price: c.item.price })), total: cartTotal, status: 'pending', timestamp: Date.now() };
-    
-    // DB의 주문 배열에 덧붙입니다.
     updateStore(adminId, 'orders', prev => [...prev, newOrder]);
-    setCart([]); // 주문 완료 후 장바구니 비우기
+    setCart([]);
     await showAlert('주문 접수', '주문이 접수되었습니다. 잠시만 기다려주세요.');
   };
 
-  // 관리자(직원) 호출 (Firestore 통신)
   const callAdmin = async () => {
     const newCall = { id: 'call_' + Date.now() + Math.random(), roomId, status: 'pending', timestamp: Date.now() };
     updateStore(adminId, 'calls', prev => [...prev, newCall]);
@@ -1103,7 +1046,6 @@ function TabletView({ adminId, storeData, roomId, updateStore, logout, showAlert
 
   return (
     <div className="flex h-screen bg-[#F8F9FA] text-gray-800 font-sans overflow-hidden">
-      {/* 상단 기기 정보 바 (데모용) */}
       <div className="absolute top-0 left-0 right-0 bg-slate-900 text-white p-3 flex justify-between items-center z-50 shadow-md">
         <div className="flex items-center gap-4 ml-2">
           <div className="flex items-center gap-2"><Store className="w-4 h-4 text-blue-400" /><span className="font-bold text-sm">{storeName}</span></div>
@@ -1114,7 +1056,6 @@ function TabletView({ adminId, storeData, roomId, updateStore, logout, showAlert
       </div>
 
       <div className="flex w-full h-full pt-[52px]">
-        {/* 화면 왼쪽: 메인 메뉴 선택 영역 */}
         <div className="flex-1 flex flex-col h-full bg-white relative">
           <div className="p-6 md:p-8 border-b border-gray-100 flex justify-between items-end">
             <div><p className="text-blue-600 font-black mb-1">{currentRoom?.name} 전용 태블릿</p><h1 className="text-3xl md:text-4xl font-black text-gray-900">ROOM SERVICE</h1></div>
@@ -1141,11 +1082,9 @@ function TabletView({ adminId, storeData, roomId, updateStore, logout, showAlert
               </div>
             )}
           </div>
-          {/* 스크롤 시 시각적 매끄러움을 위한 하단 그라데이션 장식 */}
           <div className="absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-gray-100 to-transparent pointer-events-none"></div>
         </div>
 
-        {/* 화면 오른쪽: 장바구니(결제) 영역 */}
         <div className="w-96 bg-white border-l border-gray-200 flex flex-col shadow-[-10px_0_20px_rgba(0,0,0,0.02)] z-10">
           <div className="p-6 border-b border-gray-100 flex items-center gap-3"><ShoppingCart className="w-6 h-6 text-gray-800" /><h2 className="text-xl font-bold text-gray-900">새 주문 담기</h2><span className="ml-auto bg-blue-100 text-blue-700 px-3 py-1.5 rounded-full text-sm font-bold">{cart.reduce((a, b) => a + b.quantity, 0)}개</span></div>
           <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-gray-50/50">
@@ -1172,7 +1111,6 @@ function TabletView({ adminId, storeData, roomId, updateStore, logout, showAlert
         </div>
       </div>
 
-      {/* 태블릿용 과거 주문 내역 (영수증) 확인 모달 */}
       {showHistoryModal && (
         <ModalWrapper title="나의 주문 명세" onClose={() => setShowHistoryModal(false)}>
            <div className="max-h-[60vh] overflow-y-auto mb-6 pr-2">
@@ -1204,10 +1142,8 @@ function TabletView({ adminId, storeData, roomId, updateStore, logout, showAlert
 }
 
 // ==========================================
-// 전역 커스텀 모달 (Global Modal)
+// 전역 커스텀 모달 컴포넌트
 // ==========================================
-// 브라우저 네이티브인 alert, confirm, prompt를 사용하면 모바일 뷰어 등에서 차단되거나 로직이 멈추는 오류가 생깁니다.
-// 이를 방지하기 위해 React 상태로 컨트롤되는 공통 디자인 모달 컴포넌트를 사용합니다.
 function GlobalModal({ config }) {
   if (!config) return null;
   const [inputValue, setInputValue] = useState(config.defaultValue || '');
