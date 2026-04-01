@@ -1086,3 +1086,47 @@ function TabletView({ adminId, storeData, roomId, updateStore, logout, showAlert
     </div>
   );
 }
+
+// ==========================================
+// 전역 커스텀 모달 컴포넌트
+// ==========================================
+function GlobalModal({ config }) {
+  if (!config) return null;
+  const [inputValue, setInputValue] = useState(config.defaultValue || '');
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[100] backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-slide-in-up">
+        <h3 className="text-xl font-black text-gray-900 mb-3">{config.title}</h3>
+        <p className="text-gray-600 mb-6 whitespace-pre-wrap leading-relaxed">{config.message}</p>
+        
+        {config.type === 'prompt' && (
+          <input 
+            autoFocus 
+            value={inputValue} 
+            onChange={e => setInputValue(e.target.value)} 
+            className="w-full border border-gray-300 p-3 rounded-lg mb-6 focus:ring-2 focus:ring-blue-500 outline-none" 
+            placeholder="입력해주세요"
+          />
+        )}
+        
+        <div className="flex justify-end gap-2">
+          {config.type !== 'alert' && (
+            <button 
+              onClick={config.onCancel} 
+              className="px-5 py-2.5 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200 transition-colors"
+            >
+              취소
+            </button>
+          )}
+          <button 
+            onClick={() => config.onConfirm(inputValue)} 
+            className="px-5 py-2.5 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-colors shadow-sm"
+          >
+            확인
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
