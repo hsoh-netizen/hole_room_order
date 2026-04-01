@@ -21,16 +21,16 @@ const firebaseConfig = {
   appId: "1:167618977732:web:3a49ea5945ea2bdc470e91"
 };
 
-// 파이어베이스 초기화
+// --- 파이어베이스 초기화 (Auth 제거)
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 // --- 초기 더미 데이터 세팅 ---
 const INITIAL_MENU = [
-  { id: 'm1', name: '아메리카노', price: 4500, description: '최고급 원두로 내린 아메리카노', image: 'https://images.unsplash.com/photo-1551030173-122aabc4489c?auto=format&fit=crop&q=80&w=200&h=200', category: '음료' },
-  { id: 'm2', name: '카페라떼', price: 5000, description: '부드러운 우유가 들어간 라떼', image: 'https://images.unsplash.com/photo-1570968915860-54d5c301fa9f?auto=format&fit=crop&q=80&w=200&h=200', category: '음료' },
-  { id: 'm3', name: '클럽 샌드위치', price: 8500, description: '신선한 야채와 베이컨이 들어간 샌드위치', image: 'https://images.unsplash.com/photo-1528735602780-2552fd46c7af?auto=format&fit=crop&q=80&w=200&h=200', category: '식사' },
-  { id: 'm4', name: '감자튀김', price: 6000, description: '바삭하게 튀겨낸 감자튀김과 케찹', image: 'https://images.unsplash.com/photo-1576107232684-1279f390859f?auto=format&fit=crop&q=80&w=200&h=200', category: '스낵' },
+  { id: 'm1', name: '아메리카노', price: 4500, description: '최고급 원두로 내린 아메리카노', category: '음료' },
+  { id: 'm2', name: '카페라떼', price: 5000, description: '부드러운 우유가 들어간 라떼', category: '음료' },
+  { id: 'm3', name: '클럽 샌드위치', price: 8500, description: '신선한 야채와 베이컨이 들어간 샌드위치', category: '식사' },
+  { id: 'm4', name: '감자튀김', price: 6000, description: '바삭하게 튀겨낸 감자튀김과 케찹', category: '스낵' },
 ];
 
 const INITIAL_STORES = {
@@ -951,7 +951,7 @@ function AdminMenu({ menuItems, adminId, updateStore, showConfirm }) {
   const handleSave = (e) => {
     e.preventDefault();
     const formData = new FormData(e.target);
-    const newItem = { id: editingItem.id || 'm_' + Date.now(), name: formData.get('name'), price: parseInt(formData.get('price'), 10), description: formData.get('description'), category: formData.get('category'), image: formData.get('image') || 'https://via.placeholder.com/200?text=No+Image' };
+    const newItem = { id: editingItem.id || 'm_' + Date.now(), name: formData.get('name'), price: parseInt(formData.get('price'), 10), description: formData.get('description'), category: formData.get('category') };
     updateStore(adminId, 'menuItems', prev => editingItem.id ? prev.map(m => m.id === newItem.id ? newItem : m) : [...prev, newItem]);
     setEditingItem(null);
   };
@@ -968,16 +968,19 @@ function AdminMenu({ menuItems, adminId, updateStore, showConfirm }) {
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {menuItems.map(item => (
-          <div key={item.id} className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100 flex flex-col">
-            <img src={item.image} alt={item.name} className="w-full h-40 object-cover bg-gray-100" onError={(e)=>{e.target.src='https://via.placeholder.com/200?text=Image+Error'}} />
-            <div className="p-4 flex-1 flex flex-col">
-              <div className="text-xs text-blue-600 font-bold mb-1">{item.category}</div>
-              <h3 className="font-bold text-gray-800 text-lg">{item.name}</h3>
-              <div className="text-gray-500 text-sm flex-1 mt-1 mb-2 line-clamp-2">{item.description}</div>
-              <div className="font-black text-lg text-gray-900">{item.price.toLocaleString()}원</div>
-              <div className="flex gap-2 mt-4 pt-4 border-t border-gray-50">
-                <button onClick={() => setEditingItem(item)} className="flex-1 bg-gray-50 text-gray-600 py-2 rounded-lg hover:bg-gray-100 flex justify-center items-center gap-1 text-sm font-medium"><Edit className="w-4 h-4" /> 수정</button>
-                <button onClick={() => deleteItem(item.id)} className="flex-1 bg-red-50 text-red-600 py-2 rounded-lg hover:bg-red-100 flex justify-center items-center gap-1 text-sm font-medium"><Trash2 className="w-4 h-4" /> 삭제</button>
+          <div key={item.id} className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100 flex flex-col min-h-[160px]">
+            <div className="p-4 flex-1 flex flex-col justify-between">
+              <div>
+                <div className="text-xs text-blue-600 font-bold mb-1">{item.category}</div>
+                <h3 className="font-bold text-gray-800 text-lg">{item.name}</h3>
+                <div className="text-gray-500 text-sm flex-1 mt-1 mb-2 line-clamp-2">{item.description}</div>
+              </div>
+              <div>
+                <div className="font-black text-lg text-gray-900">{item.price.toLocaleString()}원</div>
+                <div className="flex gap-2 mt-4 pt-4 border-t border-gray-50">
+                  <button onClick={() => setEditingItem(item)} className="flex-1 bg-gray-50 text-gray-600 py-2 rounded-lg hover:bg-gray-100 flex justify-center items-center gap-1 text-sm font-medium"><Edit className="w-4 h-4" /> 수정</button>
+                  <button onClick={() => deleteItem(item.id)} className="flex-1 bg-red-50 text-red-600 py-2 rounded-lg hover:bg-red-100 flex justify-center items-center gap-1 text-sm font-medium"><Trash2 className="w-4 h-4" /> 삭제</button>
+                </div>
               </div>
             </div>
           </div>
@@ -991,7 +994,6 @@ function AdminMenu({ menuItems, adminId, updateStore, showConfirm }) {
             <div><label className="block text-sm font-bold text-gray-700 mb-1">메뉴명</label><input required name="name" defaultValue={editingItem.name} className="w-full border border-gray-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-blue-500" placeholder="예: 아이스 아메리카노" /></div>
             <div><label className="block text-sm font-bold text-gray-700 mb-1">가격 (원)</label><input required type="number" name="price" defaultValue={editingItem.price} className="w-full border border-gray-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-blue-500" /></div>
             <div><label className="block text-sm font-bold text-gray-700 mb-1">설명</label><textarea required name="description" defaultValue={editingItem.description} className="w-full border border-gray-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-blue-500" rows="2"></textarea></div>
-            <div><label className="block text-sm font-bold text-gray-700 mb-1">사진 URL (선택)</label><input name="image" defaultValue={editingItem.image} className="w-full border border-gray-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-blue-500" placeholder="https://..." /></div>
             <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-lg hover:bg-blue-700 mt-6 shadow-md">저장하기</button>
           </form>
         </ModalWrapper>
@@ -1071,8 +1073,7 @@ function TabletView({ adminId, storeData, roomId, updateStore, logout, showAlert
             {filteredMenu.length === 0 ? <div className="text-center py-20 text-gray-400 font-medium">관리자가 등록한 메뉴가 없습니다.</div> : (
               <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                 {filteredMenu.map(item => (
-                  <div key={item.id} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden flex flex-col active:scale-[0.98] transition-transform cursor-pointer group hover:shadow-md" onClick={() => addToCart(item)}>
-                    <div className="h-48 bg-gray-200 relative overflow-hidden"><img src={item.image} alt={item.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" /><div className="absolute inset-0 bg-black/5 group-hover:bg-transparent transition-colors"></div></div>
+                  <div key={item.id} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden flex flex-col active:scale-[0.98] transition-transform cursor-pointer group hover:shadow-md min-h-[160px]" onClick={() => addToCart(item)}>
                     <div className="p-5 flex-1 flex flex-col justify-between">
                       <div><h3 className="font-bold text-xl text-gray-900 mb-1">{item.name}</h3><p className="text-gray-500 text-sm line-clamp-2">{item.description}</p></div>
                       <div className="mt-4 flex justify-between items-center"><span className="font-black text-lg text-blue-600">{item.price.toLocaleString()}원</span><div className="bg-black text-white p-2.5 rounded-full group-hover:bg-blue-600"><Plus className="w-5 h-5" /></div></div>
