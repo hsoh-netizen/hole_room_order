@@ -6,44 +6,9 @@ import {
   LogOut, User, Lock, Store, Key, LogIn, ShieldCheck, Activity, Users, Smartphone
 } from 'lucide-react';
 
-// --- 파이어베이스 연동을 위한 모듈 로드 ---
-import { initializeApp } from "firebase/app";
-import { getFirestore, doc, onSnapshot, setDoc } from "firebase/firestore";
-
-// --- 고객님의 파이어베이스 설정값 적용 ---
-const firebaseConfig = {
-  apiKey: "AIzaSyBpgZ2GJsSC8ZxNuEyct-oRcWXPLt2bptc",
-  authDomain: "holeroomorder.firebaseapp.com",
-  projectId: "holeroomorder",
-  storageBucket: "holeroomorder.firebasestorage.app",
-  messagingSenderId: "167618977732",
-  appId: "1:167618977732:web:3a49ea5945ea2bdc470e91"
-};
-
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-
-// --- 초기 더미 데이터 ---
-const INITIAL_MENU = [
-  { id: 'm1', name: '아메리카노', price: 4500, description: '최고급 원두로 내린 아메리카노', category: '음료' },
-  { id: 'm2', name: '카페라떼', price: 5000, description: '부드러운 우유가 들어간 라떼', category: '음료' },
-  { id: 'm3', name: '클럽 샌드위치', price: 8500, description: '신선한 야채와 베이컨이 들어간 샌드위치', category: '식사' },
-  { id: 'm4', name: '감자튀김', price: 6000, description: '바삭하게 튀겨낸 감자튀김과 케찹', category: '스낵' },
-];
-
-const INITIAL_STORES = {
-  'admin': {
-    password: 'admin',
-    storeName: '룸오더 1호점 (데모)',
-    rooms: [
-      { id: 'room_1', name: '1번 방', loginId: 'room1', password: '1' },
-      { id: 'room_2', name: '2번 방', loginId: 'room2', password: '2' },
-    ],
-    menuItems: INITIAL_MENU,
-    orders: [],
-    calls: []
-  }
-};
+// --- 파이어베이스 제거 및 자체 실시간 통신(Socket.io) 모듈 로드 ---
+// 터미널에서 npm install socket.io-client 를 꼭 실행해주세요!
+import { io } from 'socket.io-client';
 
 // ==========================================
 // 최상위 메인 컴포넌트 (App)
@@ -58,6 +23,9 @@ export default function App() {
   });
   
   const [modalConfig, setModalConfig] = useState(null);
+  
+  // 소켓 연결을 보관하는 Ref
+  const socketRef = useRef(null);
 
   // 새로고침 시에도 로그인이 유지되도록 세션 저장
   useEffect(() => {
@@ -65,27 +33,38 @@ export default function App() {
     else localStorage.removeItem('room_order_session_v4');
   }, [session]);
 
-  // 파이어베이스 실시간 데이터 동기화 (주문, 메뉴 등 핵심 데이터만 유지)
+  // --- 자체 백엔드 서버 실시간 데이터 동기화 (Socket.io) ---
   useEffect(() => {
-    const storesRef = doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'stores');
+    // 백엔드 서버 주소 설정 
+    // 브라우저의 hostname을 확인하여 로컬 개발 환경인지 실제 서버인지 판별합니다.
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const backendUrl = isLocalhost ? 'http://localhost:3001' : '/';
+    
+    // 소켓 서버에 연결
+    socketRef.current = io(backendUrl);
 
-    let isInitialStores = true;
-    const unsubStores = onSnapshot(storesRef, (docSnap) => {
-      if (docSnap.exists()) setStoresLocal(docSnap.data().data);
-      else if (isInitialStores) setDoc(storesRef, { data: INITIAL_STORES }).catch(console.error); 
-      isInitialStores = false;
+    // 서버로부터 최신 데이터를 수신받을 때 로컬 상태를 업데이트
+    socketRef.current.on('updateStores', (data) => {
+      setStoresLocal(data);
     });
 
-    return () => { unsubStores(); };
+    // 연결 성공 시, 서버에 초기 최신 데이터를 요청
+    socketRef.current.on('connect', () => {
+      socketRef.current.emit('requestStores');
+    });
+
+    // 컴포넌트 언마운트 시 소켓 연결 해제
+    return () => {
+      if (socketRef.current) socketRef.current.disconnect();
+    };
   }, []);
 
-  // 클라우드 데이터 전송 헬퍼 함수
+  // --- 클라우드 데이터 전송 헬퍼 함수 (Socket 기반으로 변경) ---
   const setStores = (updateFn) => {
     setStoresLocal(prev => {
       const newVal = typeof updateFn === 'function' ? updateFn(prev) : updateFn;
-      setTimeout(() => {
-        setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'stores'), { data: newVal }).catch(console.error);
-      }, 0);
+      // 변경된 새 데이터를 내 화면에 먼저 띄우고, 백엔드 서버로 전송하여 다른 기기들에게도 뿌려지게 합니다.
+      if (socketRef.current) socketRef.current.emit('updateStores', newVal);
       return newVal;
     });
   };
@@ -100,9 +79,7 @@ export default function App() {
       
       const newStores = { ...prev, [adminId]: { ...prev[adminId], [key]: updatedVal } };
       
-      setTimeout(() => {
-        setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'stores'), { data: newStores }).catch(console.error);
-      }, 0);
+      if (socketRef.current) socketRef.current.emit('updateStores', newStores);
       return newStores;
     });
   };
@@ -112,11 +89,12 @@ export default function App() {
     return (safeStores[adminId]?.rooms || []).find(r => r.id === roomId)?.name || '알 수 없는 룸';
   };
 
+  // 백엔드 서버와 통신 전 로딩 화면
   if (!storesLocal) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white font-sans">
         <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p className="text-lg font-bold">클라우드 서버와 실시간 연결 중입니다...</p>
+        <p className="text-lg font-bold">서버에 연결 중입니다...</p>
         <p className="text-sm text-gray-500 mt-2">잠시만 기다려주세요.</p>
       </div>
     );
