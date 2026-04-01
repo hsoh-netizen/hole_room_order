@@ -3,7 +3,7 @@ import {
   Home, Settings, Bell, ShoppingCart, Check, X, 
   Plus, Edit, Trash2, List, UtensilsCrossed, MonitorPlay, 
   AlertCircle, Coffee, FileText, RotateCcw, 
-  LogOut, User, Lock, Store, Key, LogIn, ShieldCheck, Activity, Users, Smartphone, Server, PowerOff
+  LogOut, User, Lock, Store, Key, LogIn, ShieldCheck, Activity, Users, Smartphone
 } from 'lucide-react';
 
 // --- 파이어베이스 연동을 위한 모듈 로드 ---
@@ -50,8 +50,8 @@ const INITIAL_STORES = {
 // ==========================================
 export default function App() {
   const [storesLocal, setStoresLocal] = useState(null);
-  const [activeSessionsLocal, setActiveSessionsLocal] = useState(null);
   
+  // 로그인 세션 유지용 상태
   const [session, setSession] = useState(() => {
     const saved = localStorage.getItem('room_order_session_v4');
     return saved ? JSON.parse(saved) : null;
@@ -59,20 +59,15 @@ export default function App() {
   
   const [modalConfig, setModalConfig] = useState(null);
 
-  const sessionRef = useRef(session);
-  const activeSessionsRef = useRef(activeSessionsLocal);
-  useEffect(() => { sessionRef.current = session; }, [session]);
-  useEffect(() => { activeSessionsRef.current = activeSessionsLocal; }, [activeSessionsLocal]);
-
+  // 새로고침 시에도 로그인이 유지되도록 세션 저장
   useEffect(() => {
     if (session) localStorage.setItem('room_order_session_v4', JSON.stringify(session));
     else localStorage.removeItem('room_order_session_v4');
   }, [session]);
 
-  // 파이어베이스 실시간 데이터 동기화
+  // 파이어베이스 실시간 데이터 동기화 (주문, 메뉴 등 핵심 데이터만 유지)
   useEffect(() => {
     const storesRef = doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'stores');
-    const sessionsRef = doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions');
 
     let isInitialStores = true;
     const unsubStores = onSnapshot(storesRef, (docSnap) => {
@@ -81,79 +76,7 @@ export default function App() {
       isInitialStores = false;
     });
 
-    let isInitialSessions = true;
-    const unsubSessions = onSnapshot(sessionsRef, (docSnap) => {
-      if (docSnap.exists()) setActiveSessionsLocal(docSnap.data().data);
-      else if (isInitialSessions) setDoc(sessionsRef, { data: {} }).catch(console.error);
-      isInitialSessions = false;
-    });
-
-    return () => { unsubStores(); unsubSessions(); };
-  }, []);
-
-  // --- [버그 수정됨] 하트비트(Ping) 및 강제 로그아웃 감지 시스템 ---
-  
-  // 1. 강제 로그아웃(Kick) 당했는지 확인하는 옵저버
-  useEffect(() => {
-    if (!session || !activeSessionsLocal) return;
-
-    let key;
-    if (session.role === 'admin') key = `admin_${session.adminId}`;
-    if (session.role === 'tablet') key = `tablet_${session.adminId}_${session.roomId}`;
-    if (session.role === 'supervisor') key = 'supervisor';
-
-    if (activeSessionsLocal[key] && activeSessionsLocal[key].kicked) {
-      alert("슈퍼바이저 시스템에 의해 원격으로 로그아웃 되었습니다.");
-      handleLogout();
-    }
-  }, [session, activeSessionsLocal]);
-
-  // 2. 하트비트 핑 발송 (의존성 배열 최적화로 무한루프 방지)
-  useEffect(() => {
-    if (!session) return;
-
-    let key;
-    if (session.role === 'admin') key = `admin_${session.adminId}`;
-    if (session.role === 'tablet') key = `tablet_${session.adminId}_${session.roomId}`;
-    if (session.role === 'supervisor') key = 'supervisor';
-
-    const ping = () => {
-      setActiveSessionsLocal(prev => {
-        const safePrev = prev || {};
-        // 킥 당한 상태라면 핑을 보내어 상태를 덮어쓰지 않음
-        if (safePrev[key] && safePrev[key].kicked) return safePrev;
-
-        const next = { ...safePrev, [key]: { lastSeen: Date.now(), kicked: false } };
-        setTimeout(() => {
-          setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions'), { data: next }).catch(console.error);
-        }, 0);
-        return next;
-      });
-    };
-
-    ping(); // 최초 로그인 또는 새로고침 직후 즉시 1회 실행
-    const intervalId = setInterval(ping, 10000); 
-    
-    return () => clearInterval(intervalId);
-  }, [session]); 
-
-  // 우아한 탭 닫기 시 세션 즉시 정리
-  useEffect(() => {
-    const handleUnload = () => {
-      const currentSession = sessionRef.current;
-      if (currentSession && activeSessionsRef.current) {
-        let key;
-        if (currentSession.role === 'admin') key = `admin_${currentSession.adminId}`;
-        if (currentSession.role === 'tablet') key = `tablet_${currentSession.adminId}_${currentSession.roomId}`;
-        if (currentSession.role === 'supervisor') key = 'supervisor';
-
-        const parsed = { ...activeSessionsRef.current };
-        delete parsed[key];
-        setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions'), { data: parsed });
-      }
-    };
-    window.addEventListener('beforeunload', handleUnload);
-    return () => window.removeEventListener('beforeunload', handleUnload);
+    return () => { unsubStores(); };
   }, []);
 
   // 클라우드 데이터 전송 헬퍼 함수
@@ -189,7 +112,7 @@ export default function App() {
     return (safeStores[adminId]?.rooms || []).find(r => r.id === roomId)?.name || '알 수 없는 룸';
   };
 
-  if (!storesLocal || !activeSessionsLocal) {
+  if (!storesLocal) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white font-sans">
         <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
@@ -200,25 +123,10 @@ export default function App() {
   }
 
   const handleLogin = (newSession) => {
-    setSession(newSession); // 세션이 지정되면 하트비트 useEffect가 알아서 DB에 등록함
+    setSession(newSession); 
   };
 
   const handleLogout = () => {
-    if (session) {
-      let key;
-      if (session.role === 'admin') key = `admin_${session.adminId}`;
-      if (session.role === 'tablet') key = `tablet_${session.adminId}_${session.roomId}`;
-      if (session.role === 'supervisor') key = 'supervisor';
-
-      setActiveSessionsLocal(prev => {
-        const next = { ...prev };
-        delete next[key];
-        setTimeout(() => {
-          setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions'), { data: next }).catch(console.error);
-        }, 0);
-        return next;
-      });
-    }
     setSession(null);
   };
 
@@ -241,7 +149,7 @@ export default function App() {
     <>
       {session.role === 'supervisor' && (
         <SupervisorView 
-          stores={storesLocal} setStores={setStores} activeSessions={activeSessionsLocal}
+          stores={storesLocal} setStores={setStores}
           logout={handleLogout} showAlert={showAlert} showConfirm={showConfirm}
         />
       )}
@@ -316,7 +224,7 @@ function AuthView({ stores, handleLogin, showAlert }) {
               {tab === 'supervisor' ? 'SUPERVISOR SYSTEM' : 'ROOM ORDER SYSTEM'}
             </h1>
             <p className="text-gray-500 text-sm">
-              {tab === 'supervisor' && '최고 관리자 관제 및 매장 관리 시스템'}
+              {tab === 'supervisor' && '매장 생성 및 통합 계정 관리'}
               {tab === 'admin' && '매장 관리자 계정으로 로그인하세요.'}
               {tab === 'tablet' && '할당받은 룸 접속 코드를 입력하세요.'}
             </p>
@@ -352,33 +260,11 @@ function AuthView({ stores, handleLogin, showAlert }) {
 // ==========================================
 // 슈퍼바이저 뷰
 // ==========================================
-function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, showConfirm }) {
-  const [activeTab, setActiveTab] = useState('manage'); 
+function SupervisorView({ stores, setStores, logout, showAlert, showConfirm }) {
   const [storeForm, setStoreForm] = useState(null); 
   const [roomForm, setRoomForm] = useState(null); 
 
-  // 하트비트 비교를 위해 현재 시각을 5초마다 갱신
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 5000);
-    return () => clearInterval(timer);
-  }, []);
-
   const safeStores = stores || {};
-
-  const checkIsOnline = (key) => {
-    const sessionData = activeSessions[key];
-    if (!sessionData || sessionData.kicked) return false;
-    // 25초 이상 하트비트가 없으면 비정상 종료(오프라인)로 판단
-    return (now - sessionData.lastSeen) < 25000; 
-  };
-
-  const kickSession = async (key) => {
-    if(await showConfirm('원격 로그아웃', '해당 기기를 강제로 로그아웃 시키겠습니까?\n진행 중인 작업이 즉시 중단됩니다.')) {
-      const nextSessions = { ...activeSessions, [key]: { ...activeSessions[key], kicked: true } };
-      setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions'), { data: nextSessions }).catch(console.error);
-    }
-  };
 
   const handleStoreSubmit = async (e) => {
     e.preventDefault();
@@ -460,8 +346,7 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
           <ShieldCheck className="w-7 h-7 text-indigo-400" /> 슈퍼바이저
         </div>
         <nav className="flex-1 p-4 space-y-2">
-          <SidebarBtn icon={<Store />} label="매장 및 계정 관리" active={activeTab === 'manage'} onClick={() => setActiveTab('manage')} />
-          <SidebarBtn icon={<Activity />} label="접속 관제 및 제어" active={activeTab === 'monitor'} onClick={() => setActiveTab('monitor')} />
+          <SidebarBtn icon={<Store />} label="매장 및 계정 관리" active={true} onClick={() => {}} />
         </nav>
         <div className="p-4 border-t border-indigo-900">
           <button onClick={logout} className="w-full py-3 bg-indigo-900 hover:bg-indigo-800 rounded-lg font-medium transition flex justify-center items-center gap-2">
@@ -472,124 +357,64 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
 
       <div className="flex-1 flex flex-col overflow-hidden relative">
         <header className="bg-white shadow-sm p-5 flex justify-between items-center z-10">
-          <h1 className="text-xl font-bold text-gray-800">
-            {activeTab === 'manage' ? '전체 매장 및 룸(태블릿) 관리' : '실시간 접속 관제 및 제어'}
-          </h1>
+          <h1 className="text-xl font-bold text-gray-800">전체 매장 및 룸(태블릿) 관리</h1>
         </header>
 
         <main className="flex-1 overflow-y-auto p-6">
-          {activeTab === 'manage' && (
-            <div className="max-w-5xl mx-auto space-y-6">
-              <div className="flex justify-between items-center">
-                <p className="text-gray-500">시스템을 이용할 매장을 등록하고 태블릿 계정을 발급합니다.</p>
-                <button onClick={() => setStoreForm({mode: 'add'})} className="bg-indigo-600 text-white px-5 py-2.5 rounded-lg flex items-center gap-2 hover:bg-indigo-700 font-bold shadow-sm">
-                  <Plus className="w-5 h-5" /> 새 매장 등록
-                </button>
-              </div>
+          <div className="max-w-5xl mx-auto space-y-6">
+            <div className="flex justify-between items-center">
+              <p className="text-gray-500">시스템을 이용할 매장을 등록하고 태블릿 계정을 발급합니다.</p>
+              <button onClick={() => setStoreForm({mode: 'add'})} className="bg-indigo-600 text-white px-5 py-2.5 rounded-lg flex items-center gap-2 hover:bg-indigo-700 font-bold shadow-sm">
+                <Plus className="w-5 h-5" /> 새 매장 등록
+              </button>
+            </div>
 
-              {Object.entries(safeStores).map(([adminId, store]) => {
-                const safeStore = store || {};
-                const storeRooms = safeStore.rooms || [];
-                const storeName = safeStore.storeName || '알 수 없는 매장';
-                const password = safeStore.password || '';
+            {Object.entries(safeStores).map(([adminId, store]) => {
+              const safeStore = store || {};
+              const storeRooms = safeStore.rooms || [];
+              const storeName = safeStore.storeName || '알 수 없는 매장';
+              const password = safeStore.password || '';
 
-                return (
-                  <div key={adminId} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-                    <div className="bg-gray-50 p-5 border-b border-gray-200 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
-                      <div>
-                        <div className="flex items-center gap-2 mb-1"><h3 className="text-xl font-black text-gray-900">{storeName}</h3></div>
-                        <div className="flex gap-4 text-sm text-gray-600 bg-white inline-flex px-3 py-1.5 rounded border border-gray-200">
-                          <span className="flex items-center gap-1"><User className="w-4 h-4"/> <b>ID:</b> {adminId}</span><div className="w-px bg-gray-300"></div>
-                          <span className="flex items-center gap-1"><Key className="w-4 h-4"/> <b>PW:</b> {password}</span>
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <button onClick={() => setRoomForm({mode:'add', adminId})} className="bg-white border border-indigo-200 text-indigo-700 px-4 py-2 rounded-lg hover:bg-indigo-50 font-bold text-sm flex items-center gap-1"><Smartphone className="w-4 h-4"/> 룸 발급</button>
-                        <button onClick={() => setStoreForm({mode:'edit', adminId, ...safeStore})} className="bg-white border border-gray-300 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-50"><Edit className="w-4 h-4"/></button>
-                        <button onClick={() => deleteStore(adminId)} className="bg-red-50 text-red-600 px-3 py-2 rounded-lg hover:bg-red-100"><Trash2 className="w-4 h-4"/></button>
+              return (
+                <div key={adminId} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+                  <div className="bg-gray-50 p-5 border-b border-gray-200 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+                    <div>
+                      <div className="flex items-center gap-2 mb-1"><h3 className="text-xl font-black text-gray-900">{storeName}</h3></div>
+                      <div className="flex gap-4 text-sm text-gray-600 bg-white inline-flex px-3 py-1.5 rounded border border-gray-200">
+                        <span className="flex items-center gap-1"><User className="w-4 h-4"/> <b>ID:</b> {adminId}</span><div className="w-px bg-gray-300"></div>
+                        <span className="flex items-center gap-1"><Key className="w-4 h-4"/> <b>PW:</b> {password}</span>
                       </div>
                     </div>
-
-                    <div className="p-5 bg-white">
-                      <h4 className="text-sm font-bold text-gray-400 mb-3 flex items-center gap-2"><Smartphone className="w-4 h-4"/> 할당된 룸(태블릿) 목록</h4>
-                      {storeRooms.length === 0 ? <div className="text-sm text-gray-400 py-2">등록된 룸이 없습니다.</div> : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                          {storeRooms.map(room => (
-                            <div key={room.id} className="border border-gray-200 rounded-xl p-4 flex justify-between items-center hover:border-indigo-300 transition-colors">
-                              <div>
-                                <div className="font-bold text-gray-800 mb-1">{room.name}</div>
-                                <div className="text-xs text-gray-500 flex gap-2"><span>ID: {room.loginId}</span> / <span>PW: {room.password}</span></div>
-                              </div>
-                              <div className="flex gap-1">
-                                <button onClick={() => setRoomForm({mode:'edit', adminId, roomId:room.id, ...room})} className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"><Edit className="w-4 h-4"/></button>
-                                <button onClick={() => deleteRoom(adminId, room.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4"/></button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                    <div className="flex gap-2">
+                      <button onClick={() => setRoomForm({mode:'add', adminId})} className="bg-white border border-indigo-200 text-indigo-700 px-4 py-2 rounded-lg hover:bg-indigo-50 font-bold text-sm flex items-center gap-1"><Smartphone className="w-4 h-4"/> 룸 발급</button>
+                      <button onClick={() => setStoreForm({mode:'edit', adminId, ...safeStore})} className="bg-white border border-gray-300 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-50"><Edit className="w-4 h-4"/></button>
+                      <button onClick={() => deleteStore(adminId)} className="bg-red-50 text-red-600 px-3 py-2 rounded-lg hover:bg-red-100"><Trash2 className="w-4 h-4"/></button>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          )}
 
-          {activeTab === 'monitor' && (
-            <div className="max-w-6xl mx-auto">
-              <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-xl mb-6 flex items-center gap-3">
-                <Server className="w-6 h-6 text-indigo-600" />
-                <p className="text-indigo-900 font-medium">비정상적인 접속 끊김(네트워크 단절 등)도 25초 이내에 자동 감지되며, <b>[강제 로그아웃]</b> 클릭 시 원격으로 즉시 기기에서 튕겨냅니다.</p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {Object.entries(safeStores).map(([adminId, store]) => {
-                  const safeStore = store || {};
-                  const storeName = safeStore.storeName || '알 수 없는 매장';
-                  const storeRooms = safeStore.rooms || [];
-                  const adminKey = `admin_${adminId}`;
-                  const isAdminOnline = checkIsOnline(adminKey);
-                  
-                  return (
-                    <div key={adminId} className={`bg-white rounded-2xl border-2 transition-colors overflow-hidden ${isAdminOnline ? 'border-indigo-400 shadow-md' : 'border-gray-200'}`}>
-                      <div className={`p-4 flex items-center justify-between border-b ${isAdminOnline ? 'bg-indigo-50/50 border-indigo-100' : 'bg-gray-50 border-gray-200'}`}>
-                        <div className="flex items-center gap-3">
-                          <StatusIndicator online={isAdminOnline} />
-                          <div><div className="font-black text-gray-900">{storeName}</div><div className="text-xs text-gray-500">관리자 PC</div></div>
-                        </div>
-                        {isAdminOnline && (
-                          <button onClick={() => kickSession(adminKey)} className="flex items-center gap-1 text-xs bg-red-100 text-red-700 px-2.5 py-1.5 rounded-lg hover:bg-red-200 font-bold transition-colors">
-                            <PowerOff className="w-3 h-3"/> 강제 로그아웃
-                          </button>
-                        )}
-                      </div>
-                      
-                      <div className="p-4 grid grid-cols-1 gap-3">
-                        {storeRooms.map(room => {
-                          const tabletKey = `tablet_${adminId}_${room.id}`;
-                          const isTabletOnline = checkIsOnline(tabletKey);
-                          return (
-                            <div key={room.id} className={`flex items-center justify-between p-3 rounded-xl border ${isTabletOnline ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-100'}`}>
-                              <div className="flex items-center gap-2">
-                                <StatusIndicator online={isTabletOnline} small />
-                                <div className="font-bold text-sm text-gray-700">{room.name}</div>
-                              </div>
-                              {isTabletOnline && (
-                                <button onClick={() => kickSession(tabletKey)} className="flex items-center gap-1 text-[10px] bg-red-100 text-red-700 px-2 py-1 rounded hover:bg-red-200 font-bold transition-colors">
-                                  <PowerOff className="w-3 h-3"/> 로그아웃
-                                </button>
-                              )}
+                  <div className="p-5 bg-white">
+                    <h4 className="text-sm font-bold text-gray-400 mb-3 flex items-center gap-2"><Smartphone className="w-4 h-4"/> 할당된 룸(태블릿) 목록</h4>
+                    {storeRooms.length === 0 ? <div className="text-sm text-gray-400 py-2">등록된 룸이 없습니다.</div> : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {storeRooms.map(room => (
+                          <div key={room.id} className="border border-gray-200 rounded-xl p-4 flex justify-between items-center hover:border-indigo-300 transition-colors">
+                            <div>
+                              <div className="font-bold text-gray-800 mb-1">{room.name}</div>
+                              <div className="text-xs text-gray-500 flex gap-2"><span>ID: {room.loginId}</span> / <span>PW: {room.password}</span></div>
                             </div>
-                          );
-                        })}
-                        {storeRooms.length === 0 && <div className="text-xs text-gray-400 py-2">할당된 룸이 없습니다.</div>}
+                            <div className="flex gap-1">
+                              <button onClick={() => setRoomForm({mode:'edit', adminId, roomId:room.id, ...room})} className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"><Edit className="w-4 h-4"/></button>
+                              <button onClick={() => deleteRoom(adminId, room.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4"/></button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </main>
       </div>
 
@@ -619,16 +444,6 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
       )}
     </div>
   );
-}
-
-function StatusIndicator({ online, small }) {
-  if (online) return (
-    <div className="relative flex items-center justify-center">
-      <div className={`absolute bg-green-400 rounded-full animate-ping opacity-75 ${small ? 'w-3 h-3' : 'w-4 h-4'}`}></div>
-      <div className={`relative bg-green-500 rounded-full ${small ? 'w-2 h-2' : 'w-3 h-3'}`}></div>
-    </div>
-  );
-  return <div className={`bg-gray-300 rounded-full ${small ? 'w-2 h-2' : 'w-3 h-3'}`}></div>;
 }
 
 function ModalWrapper({ title, children, onClose }) {
@@ -948,7 +763,7 @@ function AdminMenu({ menuItems, adminId, updateStore, showConfirm }) {
                 <div className="font-black text-lg text-gray-900">{item.price.toLocaleString()}원</div>
                 <div className="flex gap-2 mt-4 pt-4 border-t border-gray-50">
                   <button onClick={() => setEditingItem(item)} className="flex-1 bg-gray-50 text-gray-600 py-2 rounded-lg hover:bg-gray-100 flex justify-center items-center gap-1 text-sm font-medium"><Edit className="w-4 h-4" /> 수정</button>
-                  <button onClick={() => deleteItem(item.id)} className="flex-1 bg-red-50 text-red-600 py-2 rounded-lg hover:bg-red-100 flex justify-center items-center gap-1 text-sm font-medium"><Trash className="w-4 h-4" /> 삭제</button>
+                  <button onClick={() => deleteItem(item.id)} className="flex-1 bg-red-50 text-red-600 py-2 rounded-lg hover:bg-red-100 flex justify-center items-center gap-1 text-sm font-medium"><Trash2 className="w-4 h-4" /> 삭제</button>
                 </div>
               </div>
             </div>
