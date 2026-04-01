@@ -51,7 +51,7 @@ export default function App() {
   const [storesLocal, setStoresLocal] = useState(null);
   const [activeSessionsLocal, setActiveSessionsLocal] = useState(null);
   
-  // 세션 유지(새로고침 방어)를 위해 로컬 스토리지 연동
+  // 전체 계정 세션 유지 (새로고침 방어용 로컬 스토리지 연동)
   const [session, setSession] = useState(() => {
     const saved = localStorage.getItem('room_order_session_v4');
     return saved ? JSON.parse(saved) : null;
@@ -64,7 +64,7 @@ export default function App() {
   useEffect(() => { sessionRef.current = session; }, [session]);
   useEffect(() => { activeSessionsRef.current = activeSessionsLocal; }, [activeSessionsLocal]);
 
-  // 세션이 변경될 때 로컬 스토리지에 저장
+  // 세션이 변경될 때 로컬 스토리지에 저장하여 새로고침 시에도 유지되게 함
   useEffect(() => {
     if (session) localStorage.setItem('room_order_session_v4', JSON.stringify(session));
     else localStorage.removeItem('room_order_session_v4');
@@ -128,11 +128,13 @@ export default function App() {
     return () => window.removeEventListener('beforeunload', handleUnload);
   }, []);
 
-  // 클라우드로 데이터 전송 헬퍼 함수 (에러 방지 || [] 처리를 강하게 추가)
+  // [버그수정] White Screen 방지: 클라우드 데이터 전송을 리액트 사이클과 완벽 분리
   const setStores = (updateFn) => {
     setStoresLocal(prev => {
       const newVal = typeof updateFn === 'function' ? updateFn(prev) : updateFn;
-      setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'stores'), { data: newVal });
+      setTimeout(() => {
+        setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'stores'), { data: newVal }).catch(console.error);
+      }, 0);
       return newVal;
     });
   };
@@ -141,8 +143,8 @@ export default function App() {
     setStoresLocal(prev => {
       if (!prev || !prev[adminId]) return prev;
       
-      // undefined 오류 방지: 배열 형태여야 하는 키들은 무조건 빈 배열로 기본값 설정
       const isArrayKey = ['orders', 'calls', 'menuItems', 'rooms'].includes(key);
+      // undefined 참조 에러 방지: 데이터가 비어있어도 무조건 빈 배열 반환
       const currentVal = prev[adminId][key] || (isArrayKey ? [] : null);
       
       const updatedVal = typeof updateFn === 'function' ? updateFn(currentVal) : updateFn;
@@ -153,7 +155,11 @@ export default function App() {
           [key]: updatedVal
         }
       };
-      setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'stores'), { data: newStores });
+      
+      // setTimeout을 이용해 Firebase 통신을 비동기로 빼서 React 충돌 방지
+      setTimeout(() => {
+        setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'stores'), { data: newStores }).catch(console.error);
+      }, 0);
       return newStores;
     });
   };
@@ -161,12 +167,20 @@ export default function App() {
   const setActiveSessions = (updateFn) => {
     setActiveSessionsLocal(prev => {
       const newVal = typeof updateFn === 'function' ? updateFn(prev) : updateFn;
-      setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions'), { data: newVal });
+      setTimeout(() => {
+        setDoc(doc(db, 'artifacts', 'holeroomorder', 'public', 'data', 'system', 'sessions'), { data: newVal }).catch(console.error);
+      }, 0);
       return newVal;
     });
   };
 
-  const getRoomName = (adminId, roomId) => (storesLocal?.[adminId]?.rooms || []).find(r => r.id === roomId)?.name || '알 수 없는 룸';
+  // 안전한 룸 이름 가져오기
+  const getRoomName = (adminId, roomId) => {
+    const safeStores = storesLocal || {};
+    const safeStore = safeStores[adminId] || {};
+    const rooms = safeStore.rooms || [];
+    return rooms.find(r => r.id === roomId)?.name || '알 수 없는 룸';
+  };
 
   // 로딩 화면 (파이어베이스 연결 대기)
   if (!storesLocal || !activeSessionsLocal) {
@@ -264,15 +278,19 @@ function AuthView({ stores, handleLogin, showAlert }) {
         await showAlert('인증 실패', '슈퍼바이저 계정 정보가 일치하지 않습니다.');
       }
     } else if (tab === 'admin') {
-      if (stores[id] && stores[id].password === pw) {
+      const safeStores = stores || {};
+      if (safeStores[id] && safeStores[id].password === pw) {
         handleLogin({ role: 'admin', adminId: id });
       } else {
         await showAlert('로그인 실패', '매장 ID 또는 비밀번호가 일치하지 않습니다.');
       }
     } else {
       let found = false;
-      for (const [adminId, store] of Object.entries(stores)) {
-        const room = (store.rooms || []).find(r => r.loginId === id && r.password === pw);
+      const safeStores = stores || {};
+      for (const [adminId, store] of Object.entries(safeStores)) {
+        const safeStore = store || {};
+        const rooms = safeStore.rooms || [];
+        const room = rooms.find(r => r.loginId === id && r.password === pw);
         if (room) {
           handleLogin({ role: 'tablet', adminId, roomId: room.id });
           found = true;
@@ -346,35 +364,41 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
   const [storeForm, setStoreForm] = useState(null); 
   const [roomForm, setRoomForm] = useState(null); 
 
+  const safeStores = stores || {};
+
   const handleStoreSubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const adminId = storeForm.mode === 'add' ? fd.get('adminId') : storeForm.adminId;
     
-    if (storeForm.mode === 'add' && stores[adminId]) {
+    if (storeForm.mode === 'add' && safeStores[adminId]) {
       await showAlert('오류', '이미 존재하는 매장 ID입니다.');
       return;
     }
 
-    setStores(prev => ({
-      ...prev,
-      [adminId]: {
-        ...prev[adminId], 
-        password: fd.get('password'),
-        storeName: fd.get('storeName'),
-        rooms: prev[adminId]?.rooms || [],
-        menuItems: prev[adminId]?.menuItems || [],
-        orders: prev[adminId]?.orders || [],
-        calls: prev[adminId]?.calls || []
-      }
-    }));
+    setStores(prev => {
+      const safePrev = prev || {};
+      const currentStore = safePrev[adminId] || {};
+      return {
+        ...safePrev,
+        [adminId]: {
+          ...currentStore, 
+          password: fd.get('password'),
+          storeName: fd.get('storeName'),
+          rooms: currentStore.rooms || [],
+          menuItems: currentStore.menuItems || [],
+          orders: currentStore.orders || [],
+          calls: currentStore.calls || []
+        }
+      };
+    });
     setStoreForm(null);
   };
 
   const deleteStore = async (adminId) => {
     if(await showConfirm('매장 삭제', '이 매장과 소속된 모든 룸, 주문 데이터를 영구히 삭제하시겠습니까?')) {
       setStores(prev => {
-        const copy = {...prev};
+        const copy = {...(prev || {})};
         delete copy[adminId];
         return copy;
       });
@@ -387,31 +411,41 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
     const loginId = fd.get('loginId');
     const adminId = roomForm.adminId;
 
-    const isDuplicate = (stores[adminId].rooms || []).some(r => r.loginId === loginId && r.id !== roomForm.roomId);
+    const currentStore = safeStores[adminId] || {};
+    const storeRooms = currentStore.rooms || [];
+
+    const isDuplicate = storeRooms.some(r => r.loginId === loginId && r.id !== roomForm.roomId);
     if (isDuplicate) {
       await showAlert('오류', '이 매장 내에 이미 존재하는 룸 ID입니다.');
       return;
     }
 
     setStores(prev => {
-      const storeRooms = prev[adminId].rooms || [];
+      const safePrev = prev || {};
+      const targetStore = safePrev[adminId] || {};
+      const rooms = targetStore.rooms || [];
       let newRooms;
       if (roomForm.mode === 'add') {
-        newRooms = [...storeRooms, { id: 'room_' + Date.now(), name: fd.get('name'), loginId, password: fd.get('password') }];
+        newRooms = [...rooms, { id: 'room_' + Date.now(), name: fd.get('name'), loginId, password: fd.get('password') }];
       } else {
-        newRooms = storeRooms.map(r => r.id === roomForm.roomId ? { ...r, name: fd.get('name'), loginId, password: fd.get('password') } : r);
+        newRooms = rooms.map(r => r.id === roomForm.roomId ? { ...r, name: fd.get('name'), loginId, password: fd.get('password') } : r);
       }
-      return { ...prev, [adminId]: { ...prev[adminId], rooms: newRooms } };
+      return { ...safePrev, [adminId]: { ...targetStore, rooms: newRooms } };
     });
     setRoomForm(null);
   };
 
   const deleteRoom = async (adminId, roomId) => {
     if(await showConfirm('룸 삭제', '이 룸의 접속 계정을 영구히 삭제하시겠습니까?')) {
-      setStores(prev => ({
-        ...prev,
-        [adminId]: { ...prev[adminId], rooms: (prev[adminId].rooms || []).filter(r => r.id !== roomId) }
-      }));
+      setStores(prev => {
+        const safePrev = prev || {};
+        const targetStore = safePrev[adminId] || {};
+        const rooms = targetStore.rooms || [];
+        return {
+          ...safePrev,
+          [adminId]: { ...targetStore, rooms: rooms.filter(r => r.id !== roomId) }
+        };
+      });
     }
   };
 
@@ -450,53 +484,60 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
                 </button>
               </div>
 
-              {Object.entries(stores).map(([adminId, store]) => (
-                <div key={adminId} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-                  <div className="bg-gray-50 p-5 border-b border-gray-200 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
-                    <div>
-                      <div className="flex items-center gap-2 mb-1">
-                        <h3 className="text-xl font-black text-gray-900">{store.storeName}</h3>
-                      </div>
-                      <div className="flex gap-4 text-sm text-gray-600 bg-white inline-flex px-3 py-1.5 rounded border border-gray-200">
-                        <span className="flex items-center gap-1"><User className="w-4 h-4"/> <b>ID:</b> {adminId}</span>
-                        <div className="w-px bg-gray-300"></div>
-                        <span className="flex items-center gap-1"><Key className="w-4 h-4"/> <b>PW:</b> {store.password}</span>
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => setRoomForm({mode:'add', adminId})} className="bg-white border border-indigo-200 text-indigo-700 px-4 py-2 rounded-lg hover:bg-indigo-50 font-bold text-sm flex items-center gap-1">
-                        <Smartphone className="w-4 h-4"/> 룸 추가발급
-                      </button>
-                      <button onClick={() => setStoreForm({mode:'edit', adminId, ...store})} className="bg-white border border-gray-300 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-50"><Edit className="w-4 h-4"/></button>
-                      <button onClick={() => deleteStore(adminId)} className="bg-red-50 text-red-600 px-3 py-2 rounded-lg hover:bg-red-100"><Trash2 className="w-4 h-4"/></button>
-                    </div>
-                  </div>
+              {Object.entries(safeStores).map(([adminId, store]) => {
+                const safeStore = store || {};
+                const storeRooms = safeStore.rooms || [];
+                const storeName = safeStore.storeName || '알 수 없는 매장';
+                const password = safeStore.password || '';
 
-                  <div className="p-5 bg-white">
-                    <h4 className="text-sm font-bold text-gray-400 mb-3 flex items-center gap-2"><Smartphone className="w-4 h-4"/> 할당된 룸(태블릿) 목록</h4>
-                    {!(store.rooms) || store.rooms.length === 0 ? (
-                      <div className="text-sm text-gray-400 py-2">등록된 룸이 없습니다.</div>
-                    ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                        {store.rooms.map(room => (
-                          <div key={room.id} className="border border-gray-200 rounded-xl p-4 flex justify-between items-center hover:border-indigo-300 transition-colors">
-                            <div>
-                              <div className="font-bold text-gray-800 mb-1">{room.name}</div>
-                              <div className="text-xs text-gray-500 flex gap-2">
-                                <span>ID: {room.loginId}</span> / <span>PW: {room.password}</span>
+                return (
+                  <div key={adminId} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div className="bg-gray-50 p-5 border-b border-gray-200 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <h3 className="text-xl font-black text-gray-900">{storeName}</h3>
+                        </div>
+                        <div className="flex gap-4 text-sm text-gray-600 bg-white inline-flex px-3 py-1.5 rounded border border-gray-200">
+                          <span className="flex items-center gap-1"><User className="w-4 h-4"/> <b>ID:</b> {adminId}</span>
+                          <div className="w-px bg-gray-300"></div>
+                          <span className="flex items-center gap-1"><Key className="w-4 h-4"/> <b>PW:</b> {password}</span>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={() => setRoomForm({mode:'add', adminId})} className="bg-white border border-indigo-200 text-indigo-700 px-4 py-2 rounded-lg hover:bg-indigo-50 font-bold text-sm flex items-center gap-1">
+                          <Smartphone className="w-4 h-4"/> 룸 추가발급
+                        </button>
+                        <button onClick={() => setStoreForm({mode:'edit', adminId, ...safeStore})} className="bg-white border border-gray-300 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-50"><Edit className="w-4 h-4"/></button>
+                        <button onClick={() => deleteStore(adminId)} className="bg-red-50 text-red-600 px-3 py-2 rounded-lg hover:bg-red-100"><Trash2 className="w-4 h-4"/></button>
+                      </div>
+                    </div>
+
+                    <div className="p-5 bg-white">
+                      <h4 className="text-sm font-bold text-gray-400 mb-3 flex items-center gap-2"><Smartphone className="w-4 h-4"/> 할당된 룸(태블릿) 목록</h4>
+                      {storeRooms.length === 0 ? (
+                        <div className="text-sm text-gray-400 py-2">등록된 룸이 없습니다.</div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                          {storeRooms.map(room => (
+                            <div key={room.id} className="border border-gray-200 rounded-xl p-4 flex justify-between items-center hover:border-indigo-300 transition-colors">
+                              <div>
+                                <div className="font-bold text-gray-800 mb-1">{room.name}</div>
+                                <div className="text-xs text-gray-500 flex gap-2">
+                                  <span>ID: {room.loginId}</span> / <span>PW: {room.password}</span>
+                                </div>
+                              </div>
+                              <div className="flex gap-1">
+                                <button onClick={() => setRoomForm({mode:'edit', adminId, roomId:room.id, ...room})} className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"><Edit className="w-4 h-4"/></button>
+                                <button onClick={() => deleteRoom(adminId, room.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4"/></button>
                               </div>
                             </div>
-                            <div className="flex gap-1">
-                              <button onClick={() => setRoomForm({mode:'edit', adminId, roomId:room.id, ...room})} className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"><Edit className="w-4 h-4"/></button>
-                              <button onClick={() => deleteRoom(adminId, room.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4"/></button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -508,7 +549,10 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {Object.entries(stores).map(([adminId, store]) => {
+                {Object.entries(safeStores).map(([adminId, store]) => {
+                  const safeStore = store || {};
+                  const storeName = safeStore.storeName || '알 수 없는 매장';
+                  const storeRooms = safeStore.rooms || [];
                   const isAdminOnline = activeSessions[`admin_${adminId}`];
                   
                   return (
@@ -517,14 +561,14 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
                         <div className="flex items-center gap-3">
                           <StatusIndicator online={isAdminOnline} />
                           <div>
-                            <div className="font-black text-gray-900">{store.storeName}</div>
+                            <div className="font-black text-gray-900">{storeName}</div>
                             <div className="text-xs text-gray-500">관리자 PC</div>
                           </div>
                         </div>
                       </div>
                       
                       <div className="p-4 grid grid-cols-2 gap-3">
-                        {(store.rooms || []).map(room => {
+                        {storeRooms.map(room => {
                           const isTabletOnline = activeSessions[`tablet_${adminId}_${room.id}`];
                           return (
                             <div key={room.id} className={`flex items-center gap-2 p-3 rounded-xl border ${isTabletOnline ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-100'}`}>
@@ -533,7 +577,7 @@ function SupervisorView({ stores, setStores, activeSessions, logout, showAlert, 
                             </div>
                           );
                         })}
-                        {(!store.rooms || store.rooms.length === 0) && <div className="col-span-2 text-xs text-gray-400 py-2">룸이 없습니다.</div>}
+                        {storeRooms.length === 0 && <div className="col-span-2 text-xs text-gray-400 py-2">룸이 없습니다.</div>}
                       </div>
                     </div>
                   );
@@ -604,14 +648,15 @@ function ModalWrapper({ title, children, onClose }) {
 // ==========================================
 function AdminView({ adminId, storeData, updateStore, getRoomName, logout, showAlert, showConfirm }) {
   const [activeTab, setActiveTab] = useState('orders'); 
-  
   const [popups, setPopups] = useState([]);
   
-  // 파이어베이스에서 불러오는 안전한 배열들
-  const orders = storeData.orders || [];
-  const calls = storeData.calls || [];
-  const menuItems = storeData.menuItems || [];
-  const rooms = storeData.rooms || [];
+  // [버그수정] 파이어베이스에서 빈 데이터를 가져오더라도 무조건 빈 배열/기본값을 보장 (White Screen 방지)
+  const safeStoreData = storeData || {};
+  const orders = safeStoreData.orders || [];
+  const calls = safeStoreData.calls || [];
+  const menuItems = safeStoreData.menuItems || [];
+  const rooms = safeStoreData.rooms || [];
+  const storeName = safeStoreData.storeName || '알 수 없는 매장';
 
   const knownOrderIds = useRef(new Set(orders.map(o => o.id)));
   const knownCallIds = useRef(new Set(calls.map(c => c.id)));
@@ -666,7 +711,7 @@ function AdminView({ adminId, storeData, updateStore, getRoomName, logout, showA
         </div>
         <div className="p-4 bg-slate-800/50 flex flex-col gap-1">
           <span className="text-xs text-slate-400">현재 매장</span>
-          <span className="font-bold text-blue-300">{storeData.storeName}</span>
+          <span className="font-bold text-blue-300">{storeName}</span>
         </div>
         <nav className="flex-1 p-4 space-y-2">
           <SidebarBtn icon={<ShoppingCart />} label="주문/호출 현황" active={activeTab === 'orders'} onClick={() => setActiveTab('orders')} badge={orders.filter(o=>o.status==='pending').length + calls.filter(c=>c.status==='pending').length} />
@@ -908,10 +953,12 @@ function TabletView({ adminId, storeData, roomId, updateStore, logout, showAlert
   const [activeCategory, setActiveCategory] = useState('전체');
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   
-  // 파이어베이스에서 불러오는 안전한 배열
-  const menuItems = storeData.menuItems || [];
-  const orders = storeData.orders || [];
-  const rooms = storeData.rooms || [];
+  // [버그수정] 파이어베이스에서 빈 데이터를 가져오더라도 무조건 빈 배열/기본값을 보장 (White Screen 방지)
+  const safeStoreData = storeData || {};
+  const menuItems = safeStoreData.menuItems || [];
+  const orders = safeStoreData.orders || [];
+  const rooms = safeStoreData.rooms || [];
+  const storeName = safeStoreData.storeName || '알 수 없는 매장';
 
   const currentRoom = rooms.find(r => r.id === roomId);
   const categories = ['전체', ...new Set(menuItems.map(m => m.category))];
@@ -947,7 +994,7 @@ function TabletView({ adminId, storeData, roomId, updateStore, logout, showAlert
     <div className="flex h-screen bg-[#F8F9FA] text-gray-800 font-sans overflow-hidden">
       <div className="absolute top-0 left-0 right-0 bg-slate-900 text-white p-3 flex justify-between items-center z-50 shadow-md">
         <div className="flex items-center gap-4 ml-2">
-          <div className="flex items-center gap-2"><Store className="w-4 h-4 text-blue-400" /><span className="font-bold text-sm">{storeData.storeName}</span></div>
+          <div className="flex items-center gap-2"><Store className="w-4 h-4 text-blue-400" /><span className="font-bold text-sm">{storeName}</span></div>
           <div className="w-px h-4 bg-slate-700"></div>
           <div className="flex items-center gap-2 text-blue-300 bg-slate-800 px-3 py-1 rounded-full"><Home className="w-4 h-4" /><span className="font-bold text-sm">{currentRoom?.name || '알 수 없음'}</span></div>
         </div>
