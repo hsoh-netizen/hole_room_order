@@ -62,52 +62,72 @@ const api = {
   },
   
   // 상태 변경 액션들 (Race Condition 방지)
-  createOrder: async (adminId, roomId, items, total) => {
-    const newOrder = { id: 'ord_' + Date.now(), roomId, items, total, status: 'pending', timestamp: Date.now() };
+createOrder: async (adminId, roomId, items, total) => {
+    const newOrder = { id: 'ord_' + Date.now() + Math.random().toString(36).substr(2, 5), roomId, items, total, status: 'pending', timestamp: Date.now() };
     if (globalDB[adminId]) {
-      globalDB[adminId].orders.push(newOrder);
-      socketMock.emit(`update_${adminId}`, globalDB[adminId]); // 변경 후 브로드캐스트
+      globalDB[adminId] = {
+        ...globalDB[adminId],
+        orders: [...globalDB[adminId].orders, newOrder] // 배열 새로 생성 (push 사용 X)
+      };
+      socketMock.emit(`update_${adminId}`, globalDB[adminId]);
     }
   },
+  
   completeOrder: async (adminId, orderId) => {
     const store = globalDB[adminId];
     if (store) {
-      const order = store.orders.find(o => o.id === orderId);
-      if (order) order.status = 'completed';
-      socketMock.emit(`update_${adminId}`, store);
-    }
-  },
-  createCall: async (adminId, roomId) => {
-    const newCall = { id: 'call_' + Date.now(), roomId, status: 'pending', timestamp: Date.now() };
-    if (globalDB[adminId]) {
-      globalDB[adminId].calls.push(newCall);
+      globalDB[adminId] = {
+        ...store,
+        orders: store.orders.map(o => o.id === orderId ? { ...o, status: 'completed' } : o) // 불변성 유지
+      };
       socketMock.emit(`update_${adminId}`, globalDB[adminId]);
     }
   },
+  
+  createCall: async (adminId, roomId) => {
+    const newCall = { id: 'call_' + Date.now() + Math.random().toString(36).substr(2, 5), roomId, status: 'pending', timestamp: Date.now() };
+    if (globalDB[adminId]) {
+      globalDB[adminId] = {
+        ...globalDB[adminId],
+        calls: [...globalDB[adminId].calls, newCall]
+      };
+      socketMock.emit(`update_${adminId}`, globalDB[adminId]);
+    }
+  },
+  
   resolveCall: async (adminId, callId) => {
     const store = globalDB[adminId];
     if (store) {
-      const call = store.calls.find(c => c.id === callId);
-      if (call) call.status = 'resolved';
-      socketMock.emit(`update_${adminId}`, store);
-    }
-  },
-  clearRoom: async (adminId, roomId) => {
-    const store = globalDB[adminId];
-    if (store) {
-      store.orders = store.orders.filter(o => o.roomId !== roomId);
-      store.calls = store.calls.filter(c => c.roomId !== roomId);
-      socketMock.emit(`update_${adminId}`, store);
-    }
-  },
-  // 관리자/매장용 관리 액션들 생략 (실제 구현 시 위와 동일한 패턴 사용)
-  // 편의상 이 예제에서는 관리용 데이터 조작은 직접 DB를 변경하는 mock 로직 사용
-  adminUpdate: async (adminId, key, newData) => {
-    if (globalDB[adminId]) {
-      globalDB[adminId][key] = newData;
+      globalDB[adminId] = {
+        ...store,
+        calls: store.calls.map(c => c.id === callId ? { ...c, status: 'resolved' } : c)
+      };
       socketMock.emit(`update_${adminId}`, globalDB[adminId]);
     }
   },
+  
+  clearRoom: async (adminId, roomId) => {
+    const store = globalDB[adminId];
+    if (store) {
+      globalDB[adminId] = {
+        ...store,
+        orders: store.orders.filter(o => o.roomId !== roomId),
+        calls: store.calls.filter(c => c.roomId !== roomId)
+      };
+      socketMock.emit(`update_${adminId}`, globalDB[adminId]);
+    }
+  },
+  
+  adminUpdate: async (adminId, key, newData) => {
+    if (globalDB[adminId]) {
+      globalDB[adminId] = {
+        ...globalDB[adminId],
+        [key]: newData
+      };
+      socketMock.emit(`update_${adminId}`, globalDB[adminId]);
+    }
+  },
+  
   supervisorUpdate: async (newData) => {
     globalDB = newData;
     socketMock.emit('update_supervisor', globalDB);
