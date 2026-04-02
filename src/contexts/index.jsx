@@ -1,58 +1,53 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { createContext, useContext, useState, useEffect } from 'react';
+import { api, socketMock, globalDB } from '../api/mockBackend';
 
-// 1. API 불러오기 (mockBackend.js)
-import { api } from './api/mockBackend';
+// ==========================================
+// [Context & State Management]
+// 상태 관리를 중앙화하여 Prop Drilling 방지
+// ==========================================
+const AuthContext = createContext(null);
+const StoreContext = createContext(null);
+const ModalContext = createContext(null);
 
-// 2. Context(전역 상태) 불러오기
-import { AuthContext, ModalContext, StoreProvider } from './contexts';
+function useModal() {
+  return useContext(ModalContext);
+}
 
-// 3. Pages(화면 뷰) 불러오기
-import AuthView from './pages/AuthView';
-import AdminView from './pages/AdminView';
-import TabletView from './pages/TabletView';
-import SupervisorView from './pages/SupervisorView';
-
-// 4. 공통 컴포넌트 불러오기
-import { GlobalModal } from './components/GlobalModal';
+// ==========================================
+// [App Component (Provider 설정)]
+// ==========================================
 
 export default function App() {
-  // [세션 상태 관리]
   const [session, setSession] = useState(() => {
     const saved = localStorage.getItem('room_order_session_v4');
     return saved ? JSON.parse(saved) : null;
   });
-  
-  // [모달 상태 관리]
   const [modalConfig, setModalConfig] = useState(null);
   
-  // [오디오 컨텍스트 관리 (오디오 자동재생 정책 우회용)]
+  // 로그인 시 오디오 컨텍스트를 미리 생성
   const audioCtxRef = useRef(null);
 
-  // 세션 변경 시 로컬스토리지 동기화
   useEffect(() => {
     if (session) localStorage.setItem('room_order_session_v4', JSON.stringify(session));
     else localStorage.removeItem('room_order_session_v4');
   }, [session]);
 
-  // [로그인 로직]
   const handleLogin = async (role, id, pw) => {
     try {
       const result = await api.login(role, id, pw);
-      
-      // 관리자로 로그인 시 사용자 클릭(Interaction) 내에서 오디오 컨텍스트 활성화
+      // 사용자 Interaction(클릭) 내에서 AudioContext 초기화
       if (role === 'admin' && !audioCtxRef.current) {
         audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
         if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
       }
       setSession(result);
     } catch (err) {
-      throw err; // 에러 발생 시 AuthView에서 캐치하여 모달을 띄움
+      throw err; // 에러는 뷰에서 처리
     }
   };
 
   const handleLogout = () => setSession(null);
 
-  // [전역 모달 로직 (Promise 기반)]
   const showModal = (type, title, message, defaultValue = '') => {
     return new Promise((resolve) => {
       setModalConfig({
@@ -73,23 +68,41 @@ export default function App() {
     <ModalContext.Provider value={modalActions}>
       <AuthContext.Provider value={{ session, login: handleLogin, logout: handleLogout, audioCtx: audioCtxRef.current }}>
         <StoreProvider session={session}>
-          
-          {/* 세션 여부와 권한(role)에 따라 알맞은 화면(페이지)을 보여줍니다 */}
-          {!session ? (
-            <AuthView />
-          ) : (
+          {!session ? <AuthView /> : (
             <>
               {session.role === 'supervisor' && <SupervisorView />}
               {session.role === 'admin' && <AdminView />}
               {session.role === 'tablet' && <TabletView />}
             </>
           )}
-
-          {/* 전역 모달창 렌더링 */}
           {modalConfig && <GlobalModal config={modalConfig} />}
-
         </StoreProvider>
       </AuthContext.Provider>
     </ModalContext.Provider>
   );
+}
+
+// 실시간 데이터를 구독하는 Store Provider
+function StoreProvider({ session, children }) {
+  const [storeData, setStoreData] = useState(null);
+  const [allStores, setAllStores] = useState(null);
+
+  useEffect(() => {
+    if (!session) return;
+    
+    if (session.role === 'supervisor') {
+      setAllStores(globalDB);
+      const handler = (data) => setAllStores({...data});
+      socketMock.on('update_supervisor', handler);
+      return () => socketMock.off('update_supervisor', handler);
+    } else {
+      setStoreData(globalDB[session.adminId] || null);
+      const handler = (data) => setStoreData({...data});
+      socketMock.on(`update_${session.adminId}`, handler);
+      return () => socketMock.off(`update_${session.adminId}`, handler);
+    }
+  }, [session]);
+
+  const value = { storeData, allStores };
+  return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
